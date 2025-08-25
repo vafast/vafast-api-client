@@ -1,0 +1,54 @@
+{
+  "name": "@vafast/api-client",
+  "version": "0.1.0",
+  "description": "Type-safe API client for Vafast framework",
+  "license": "MIT",
+  "scripts": {
+    "dev": "bun run --watch example/index.ts",
+    "test": "bun test",
+    "build": "bun build.ts",
+    "build:tsup": "tsup",
+    "release": "npm run build && npm run test && npm publish --access public"
+  },
+  "peerDependencies": {
+    "vafast": ">= 0.1.12"
+  },
+  "devDependencies": {
+    "@types/bun": "1.1.14",
+    "eslint": "9.6.0",
+    "vafast": "^0.1.13",
+    "tsup": "^8.1.0",
+    "typescript": "^5.5.3"
+  },
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    "./package.json": "./package.json",
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
+      "require": "./dist/cjs/index.js"
+    }
+  },
+  "keywords": [
+    "vafast",
+    "api",
+    "client",
+    "typescript",
+    "type-safe",
+    "http",
+    "websocket"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vafastjs/vafast-api-client"
+  },
+  "author": {
+    "name": "Vafast Team",
+    "url": "https://github.com/vafastjs",
+    "email": "team@vafast.dev"
+  },
+  "homepage": "https://github.com/vafastjs/vafast-api-client",
+  "bugs": "https://github.com/vafastjs/vafast-api-client/issues"
+}
