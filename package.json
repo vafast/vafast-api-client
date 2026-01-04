@@ -4,11 +4,10 @@
   "description": "Type-safe API client for Vafast framework",
   "license": "MIT",
   "scripts": {
+    "build": "tsup",
     "dev": "bun run --watch example/index.ts",
     "test": "bun test",
-    "build": "bun build.ts",
-    "build:tsup": "tsup",
-    "release": "npm run build && npm run test && npm publish --access public"
+    "release": "npx np"
   },
   "peerDependencies": {
     "vafast": ">= 0.1.12"
