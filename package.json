@@ -7,7 +7,7 @@
     "build": "tsup",
     "dev": "npx tsx watch example/index.ts",
     "test": "npx vitest run",
-    "release": "npx np"
+    "release": "npm run build && npm run test && npx bumpp && npm publish --access=public"
   },
   "peerDependencies": {
     "vafast": ">= 0.1.12"
