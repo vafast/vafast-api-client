@@ -1,282 +1,289 @@
-# Vafast API Client
+# @vafast/api-client
 
-一个专门为 [Vafast](https://github.com/vafastjs/vafast) 框架打造的现代化、类型安全的 API 客户端插件。
+🚀 类型安全的 Eden 风格 API 客户端，专为 [Vafast](https://github.com/user/vafast) 框架设计。
 
 ## ✨ 特性
 
-- 🚀 **专为 Vafast 设计**: 完全兼容 Vafast 框架架构
-- 🔒 **类型安全**: 完整的 TypeScript 类型支持
-- 🎯 **智能路由**: 自动推断路由类型和方法
-- 🔄 **自动重试**: 内置指数退避重试机制
-- 📡 **WebSocket 支持**: 完整的 WebSocket 客户端
-- 🧩 **中间件系统**: 灵活的请求/响应处理
-- 🎛️ **拦截器**: 强大的请求/响应拦截能力
-- 📁 **文件上传**: 支持文件和 FormData 上传
-- 💾 **缓存系统**: 智能的响应缓存机制
-- 📊 **监控统计**: 详细的请求统计和性能监控
+- 🔒 **完整类型推断** - 从路由定义自动推断 API 类型，无需手动定义接口
+- 🎯 **无需 `as const`** - 使用 `route()` 函数，类型自动保留
+- 🌊 **SSE 流式响应** - 内置 Server-Sent Events 支持，包含自动重连
+- ⏹️ **请求取消** - 支持 AbortController 取消进行中的请求
+- 🔗 **链式调用** - 优雅的 `api.users({ id }).posts.get()` 语法
+- 📦 **轻量** - 仅 8KB (gzip)
 
 ## 📦 安装
 
 ```bash
+npm install @vafast/api-client
+# 或
 bun add @vafast/api-client
 ```
 
 ## 🚀 快速开始
 
-### 基础用法
+### 1. 定义服务端路由
 
 ```typescript
-import { VafastApiClient } from '@vafast/api-client'
+// server.ts
+import { defineRoutes, route, createHandler, createSSEHandler, Type } from 'vafast'
+
+export const routes = defineRoutes([
+  // ✨ 使用 route() 函数，无需 as const
+  route('GET', '/users', createHandler(
+    { query: Type.Object({ page: Type.Optional(Type.Number()) }) },
+    async ({ query }) => ({ users: [], total: 0, page: query.page ?? 1 })
+  )),
+  
+  route('POST', '/users', createHandler(
+    { body: Type.Object({ name: Type.String(), email: Type.String() }) },
+    async ({ body }) => ({ id: crypto.randomUUID(), ...body })
+  )),
+  
+  route('GET', '/users/:id', createHandler(
+    { params: Type.Object({ id: Type.String() }) },
+    async ({ params }) => ({ id: params.id, name: 'User' })
+  )),
+  
+  // 🌊 SSE 流式响应
+  route('GET', '/chat/stream', createSSEHandler(
+    { query: Type.Object({ prompt: Type.String() }) },
+    async function* ({ query }) {
+      yield { event: 'start', data: { message: 'Starting...' } }
+      
+      for (const word of query.prompt.split(' ')) {
+        yield { data: { text: word } }
+        await new Promise(r => setTimeout(r, 100))
+      }
+      
+      yield { event: 'end', data: { message: 'Done!' } }
+    }
+  ))
+])
+
+// 导出类型供客户端使用
+export type AppRoutes = typeof routes
+```
+
+### 2. 创建类型安全客户端
+
+```typescript
+// client.ts
+import { eden, InferEden } from '@vafast/api-client'
+import type { AppRoutes } from './server'
+
+// 自动推断 API 类型
+type Api = InferEden<AppRoutes>
 
 // 创建客户端
-const client = new VafastApiClient({
-  baseURL: 'https://api.example.com',
-  timeout: 10000,
-  retries: 3
+const api = eden<Api>('http://localhost:3000', {
+  headers: { 'Authorization': 'Bearer token' },
+  timeout: 5000
 })
 
-// 发送请求
-const response = await client.get('/users', { page: 1, limit: 10 })
-if (response.error) {
-  console.error('Error:', response.error)
-} else {
-  console.log('Users:', response.data)
+// ✅ 完全类型安全的调用
+async function main() {
+  // GET /users?page=1
+  const { data: users } = await api.users.get({ page: 1 })
+  console.log(users?.total) // ✅ 类型推断
+
+  // POST /users
+  const { data: newUser } = await api.users.post({ 
+    name: 'John', 
+    email: 'john@example.com' 
+  })
+  console.log(newUser?.id) // ✅ 类型推断
+
+  // GET /users/:id
+  const { data: user } = await api.users({ id: '123' }).get()
+  console.log(user?.name) // ✅ 类型推断
 }
 ```
 
-### 类型安全客户端
+## 📖 API 文档
+
+### `eden<T>(baseURL, config?)`
+
+创建 Eden 风格的 API 客户端。
 
 ```typescript
-import { createTypedClient } from '@vafast/api-client'
-import type { Server } from 'vafast'
-
-// 从 Vafast 服务器创建类型安全客户端
-const typedClient = createTypedClient<Server>(server, {
-  baseURL: 'https://api.example.com'
-})
-
-// 现在有完整的类型检查
-const users = await typedClient.get('/users', { page: 1, limit: 10 })
-const user = await typedClient.post('/users', { name: 'John', email: 'john@example.com' })
-```
-
-### WebSocket 客户端
-
-```typescript
-import { createWebSocketClient } from '@vafast/api-client'
-
-const wsClient = createWebSocketClient('wss://ws.example.com', {
-  autoReconnect: true,
-  maxReconnectAttempts: 5
-})
-
-await wsClient.connect()
-
-wsClient.on('message', (data) => {
-  console.log('Received:', data)
-})
-
-wsClient.send({ type: 'chat', message: 'Hello!' })
-```
-
-## 📚 API 参考
-
-### VafastApiClient
-
-主要的 API 客户端类。
-
-#### 构造函数
-
-```typescript
-new VafastApiClient(config?: ApiClientConfig)
-```
-
-#### 配置选项
-
-```typescript
-interface ApiClientConfig {
-  baseURL?: string                    // 基础 URL
-  defaultHeaders?: Record<string, string>  // 默认请求头
-  timeout?: number                    // 请求超时时间（毫秒）
-  retries?: number                    // 重试次数
-  retryDelay?: number                 // 重试延迟（毫秒）
-  validateStatus?: (status: number) => boolean  // 状态码验证函数
-}
-```
-
-#### 方法
-
-- `get(path, query?, config?)` - GET 请求
-- `post(path, body?, config?)` - POST 请求
-- `put(path, body?, config?)` - PUT 请求
-- `delete(path, config?)` - DELETE 请求
-- `patch(path, body?, config?)` - PATCH 请求
-- `head(path, config?)` - HEAD 请求
-- `options(path, config?)` - OPTIONS 请求
-
-### 中间件系统
-
-```typescript
-client.addMiddleware({
-  name: 'logging',
-  onRequest: async (request, config) => {
-    console.log(`[${new Date().toISOString()}] ${request.method} ${request.url}`)
+const api = eden<Api>('http://localhost:3000', {
+  // 默认请求头
+  headers: { 'Authorization': 'Bearer token' },
+  
+  // 全局超时（毫秒）
+  timeout: 5000,
+  
+  // 请求拦截器
+  onRequest: (request) => {
+    console.log('Request:', request.url)
     return request
   },
-  onResponse: async (response, config) => {
-    console.log(`Response: ${response.status}`)
+  
+  // 响应拦截器
+  onResponse: (response) => {
+    console.log('Response:', response.status)
     return response
   },
-  onError: async (error, config) => {
+  
+  // 错误处理
+  onError: (error) => {
     console.error('Error:', error.message)
   }
 })
 ```
 
-### 拦截器系统
+### HTTP 方法
 
 ```typescript
-client.addInterceptor({
-  request: async (config) => {
-    // 添加认证头
-    config.headers = { ...config.headers, 'Authorization': 'Bearer token' }
-    return config
-  },
-  response: async (response) => {
-    // 处理响应
-    return response
-  },
-  error: async (error) => {
-    // 处理错误
-    return error
-  }
-})
-```
+// GET 请求（带 query 参数）
+api.users.get({ page: 1, limit: 10 })
 
-### WebSocket 客户端
+// POST 请求（带 body）
+api.users.post({ name: 'John', email: 'john@example.com' })
 
-```typescript
-const wsClient = createWebSocketClient(url, options)
+// PUT 请求
+api.users({ id: '123' }).put({ name: 'Jane' })
 
-// 连接
-await wsClient.connect()
+// DELETE 请求
+api.users({ id: '123' }).delete()
 
-// 监听事件
-wsClient.on('message', (data) => console.log(data))
-wsClient.on('open', () => console.log('Connected'))
-wsClient.on('close', () => console.log('Disconnected'))
-
-// 发送数据
-wsClient.send({ type: 'chat', message: 'Hello' })
-
-// 断开连接
-wsClient.disconnect()
-```
-
-## 🔧 高级用法
-
-### 文件上传
-
-```typescript
-// 单个文件
-const response = await client.post('/upload', {
-  file: fileInput.files[0],
-  description: 'User avatar'
-})
-
-// 多个文件
-const response = await client.post('/upload', {
-  files: [file1, file2, file3],
-  category: 'images'
-})
-
-// 混合数据
-const response = await client.post('/upload', {
-  file: fileInput.files[0],
-  metadata: {
-    name: 'avatar.jpg',
-    size: fileInput.files[0].size,
-    type: fileInput.files[0].type
-  }
-})
+// PATCH 请求
+api.users({ id: '123' }).patch({ name: 'Updated' })
 ```
 
 ### 路径参数
 
 ```typescript
-// 使用工具函数替换路径参数
-import { replacePathParams } from '@vafast/api-client'
-
-const path = '/users/:id/posts/:postId'
-const params = { id: '123', postId: '456' }
-const resolvedPath = replacePathParams(path, params)
-// 结果: '/users/123/posts/456'
-
-const response = await client.get(resolvedPath)
+// 使用函数调用传递参数
+api.users({ id: '123' }).get()           // GET /users/123
+api.users({ id: '123' }).posts.get()     // GET /users/123/posts
+api.users({ id: '123' }).posts({ postId: '456' }).get()  // GET /users/123/posts/456
 ```
 
-### 查询参数构建
+### 请求取消
 
 ```typescript
-import { buildQueryString } from '@vafast/api-client'
+const controller = new AbortController()
 
-const query = { page: 1, limit: 10, search: 'john' }
-const queryString = buildQueryString(query)
-// 结果: '?page=1&limit=10&search=john'
+// 发起请求
+const promise = api.users.get({ page: 1 }, { signal: controller.signal })
 
-const response = await client.get(`/users${queryString}`)
+// 取消请求
+controller.abort()
+
+const result = await promise
+if (result.error) {
+  console.log('请求已取消')
+}
 ```
 
-### 缓存配置
+### 单次请求配置
 
 ```typescript
-client.setCacheConfig({
-  enabled: true,
-  ttl: 300000, // 5分钟
-  maxSize: 100,
-  strategy: 'memory'
+// 覆盖全局配置
+const result = await api.users.get({ page: 1 }, {
+  headers: { 'X-Custom-Header': 'value' },
+  timeout: 10000,
+  signal: abortController.signal
 })
 ```
 
-### 重试配置
+## 🌊 SSE 流式响应
+
+### 基本用法
 
 ```typescript
-client.setRetryConfig({
-  enabled: true,
-  maxRetries: 5,
-  retryDelay: 1000,
-  backoffMultiplier: 2,
-  retryableStatuses: [408, 429, 500, 502, 503, 504]
-})
+const subscription = api.chat.stream.subscribe(
+  { prompt: 'Hello AI!' },  // query 参数
+  {
+    onOpen: () => console.log('连接已建立'),
+    onMessage: (data) => console.log('收到:', data),
+    onError: (err) => console.error('错误:', err),
+    onClose: () => console.log('连接已关闭'),
+    onReconnect: (attempt, max) => console.log(`重连中 ${attempt}/${max}`),
+    onMaxReconnects: () => console.log('达到最大重连次数')
+  },
+  {
+    reconnectInterval: 3000,  // 重连间隔（毫秒）
+    maxReconnects: 5          // 最大重连次数
+  }
+)
+
+// 取消订阅
+subscription.unsubscribe()
 ```
+
+### SSE 特性
+
+- ✅ **自动重连** - 网络断开后自动重连
+- ✅ **断点续传** - 使用 `Last-Event-ID` 从断点继续
+- ✅ **可配置重连策略** - 自定义重连间隔和最大次数
+- ✅ **事件类型支持** - 支持自定义事件名称
+
+## 🔧 类型定义
+
+### `InferEden<T>`
+
+从 vafast 路由数组推断 API 契约类型。
+
+```typescript
+import { InferEden } from '@vafast/api-client'
+
+const routes = defineRoutes([...])
+type Api = InferEden<typeof routes>
+```
+
+### `EdenClient<T>`
+
+Eden 客户端类型。
+
+```typescript
+import { EdenClient } from '@vafast/api-client'
+
+type MyClient = EdenClient<Api>
+```
+
+### `ApiResponse<T>`
+
+API 响应类型。
+
+```typescript
+interface ApiResponse<T> {
+  data: T | null        // 响应数据
+  error: Error | null   // 错误信息
+  status: number        // HTTP 状态码
+  headers: Headers      // 响应头
+  response: Response    // 原始 Response
+}
+```
+
+### `RequestConfig`
+
+请求配置类型。
+
+```typescript
+interface RequestConfig {
+  headers?: Record<string, string>  // 请求头
+  timeout?: number                   // 超时（毫秒）
+  signal?: AbortSignal               // 取消信号
+}
+```
+
+## 📁 示例
+
+查看 `example/` 目录获取完整示例：
+
+- `auto-infer.ts` - 自动类型推断示例
+- `test-sse.ts` - SSE 流式响应测试
 
 ## 🧪 测试
 
 ```bash
+npm test
+# 或
 bun test
 ```
 
-## 📖 示例
-
-查看 `example/` 目录中的完整示例：
-
-- `index.ts` - 主要使用示例
-- 基础 HTTP 请求
-- 类型安全客户端
-- WebSocket 客户端
-- 中间件和拦截器
-- 文件上传
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
 ## 📄 许可证
 
-MIT License
-
-## 🔗 相关链接
-
-- [Vafast 官方文档](https://vafast.dev)
-- [GitHub 仓库](https://github.com/vafastjs/vafast-api-client)
-- [问题反馈](https://github.com/vafastjs/vafast-api-client/issues)
+MIT
