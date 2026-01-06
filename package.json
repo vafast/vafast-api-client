@@ -10,14 +10,16 @@
     "release": "npm run build && npm run test && npx bumpp && npm publish --access=public"
   },
   "peerDependencies": {
-    "vafast": ">= 0.1.12"
+    "vafast": "^0.3.10",
+    "@sinclair/typebox": ">=0.32.0"
   },
   "devDependencies": {
-    "@types/bun": "1.1.14",
+    "@sinclair/typebox": "^0.34.0",
     "eslint": "9.6.0",
-    "vafast": "^0.1.13",
+    "vafast": "^0.3.10",
     "tsup": "^8.1.0",
-    "typescript": "^5.5.3"
+    "typescript": "^5.5.3",
+    "vitest": "^2.1.8"
   },
   "main": "./dist/cjs/index.js",
   "module": "./dist/index.mjs",

@@ -1,4 +1,4 @@
-import { describe, expect, it, beforeEach, mock } from 'bun:test'
+import { describe, expect, it, beforeEach, vi } from 'vitest'
 import { 
   createTypedClient, 
   createRouteBasedClient, 
@@ -7,14 +7,14 @@ import {
 } from '../src'
 
 // Mock VafastApiClient
-const MockVafastApiClient = mock(() => ({
-  get: mock(() => Promise.resolve({ data: 'test', error: null, status: 200, headers: new Headers(), response: new Response() })),
-  post: mock(() => Promise.resolve({ data: 'created', error: null, status: 201, headers: new Headers(), response: new Response() })),
-  put: mock(() => Promise.resolve({ data: 'updated', error: null, status: 200, headers: new Headers(), response: new Response() })),
-  delete: mock(() => Promise.resolve({ data: 'deleted', error: null, status: 200, headers: new Headers(), response: new Response() })),
-  patch: mock(() => Promise.resolve({ data: 'patched', error: null, status: 200, headers: new Headers(), response: new Response() })),
-  head: mock(() => Promise.resolve({ data: null, error: null, status: 200, headers: new Headers(), response: new Response() })),
-  options: mock(() => Promise.resolve({ data: null, error: null, status: 200, headers: new Headers(), response: new Response() }))
+const MockVafastApiClient = vi.fn(() => ({
+  get: vi.fn(() => Promise.resolve({ data: 'test', error: null, status: 200, headers: new Headers(), response: new Response() })),
+  post: vi.fn(() => Promise.resolve({ data: 'created', error: null, status: 201, headers: new Headers(), response: new Response() })),
+  put: vi.fn(() => Promise.resolve({ data: 'updated', error: null, status: 200, headers: new Headers(), response: new Response() })),
+  delete: vi.fn(() => Promise.resolve({ data: 'deleted', error: null, status: 200, headers: new Headers(), response: new Response() })),
+  patch: vi.fn(() => Promise.resolve({ data: 'patched', error: null, status: 200, headers: new Headers(), response: new Response() })),
+  head: vi.fn(() => Promise.resolve({ data: null, error: null, status: 200, headers: new Headers(), response: new Response() })),
+  options: vi.fn(() => Promise.resolve({ data: null, error: null, status: 200, headers: new Headers(), response: new Response() }))
 }))
 
 // Mock server type
@@ -239,7 +239,7 @@ describe('Typed Client', () => {
   describe('Type Safety', () => {
     it('should maintain type safety for server types', () => {
       // This test ensures TypeScript compilation works correctly
-      const typedClient: TypedApiClient<MockServer> = createTypedClient<MockServer>(mockServer as any)
+      const typedClient = createTypedClient<MockServer>(mockServer as any)
       expect(typedClient).toBeDefined()
     })
 

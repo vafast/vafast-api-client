@@ -7,6 +7,14 @@ export {
   type TypedApiClient 
 } from './core/typed-client'
 
+// Eden - 类型安全 API 客户端（推荐）
+export {
+  eden,
+  type EdenConfig,
+  type EdenClient,
+  type InferEden,
+} from './core/eden'
+
 // WebSocket 客户端
 export { 
   VafastWebSocketClient, 

@@ -1,5 +1,13 @@
-import { describe, expect, it, beforeEach, mock } from "bun:test";
+import { describe, expect, it, beforeEach, vi } from "vitest";
 import { VafastWebSocketClient, createWebSocketClient, createTypedWebSocketClient } from "../src";
+
+// Mock CloseEvent for Node.js environment
+class MockCloseEvent extends Event {
+  constructor(type: string) {
+    super(type);
+  }
+}
+(global as any).CloseEvent = MockCloseEvent;
 
 // Mock WebSocket
 class MockWebSocket {

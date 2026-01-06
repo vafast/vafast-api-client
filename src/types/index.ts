@@ -2,15 +2,34 @@
 export type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
 
 // 简化的 vafast 类型定义
-export interface Server {
-  routes: Record<string, Route>
-}
+// 支持两种风格：
+// 1. 运行时路由配置 (VafastRoute)
+// 2. API 类型契约 (ApiContractRoute)
 
-export interface Route {
+/** 运行时路由配置 */
+export interface VafastRoute {
   method: string
   path: string
   handler: RouteHandler
 }
+
+/** API 契约路由（用于类型推断） */
+export interface ApiContractRoute {
+  [method: string]: {
+    query?: Record<string, unknown>
+    params?: Record<string, unknown>
+    body?: unknown
+    response?: unknown
+  }
+}
+
+/** Server 类型 - 支持两种路由风格 */
+export interface Server {
+  routes: Record<string, VafastRoute | ApiContractRoute>
+}
+
+/** 旧版 Route 类型（向后兼容） */
+export interface Route extends VafastRoute {}
 
 export interface RouteHandler {
   (req: unknown, res: unknown): unknown

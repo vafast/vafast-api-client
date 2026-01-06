@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it } from 'vitest'
 import {
   buildQueryString,
   replacePathParams,
@@ -321,10 +321,10 @@ describe('Utils', () => {
 
   describe('cloneRequest', () => {
     it('should clone request object', () => {
+      // Use GET request without body to avoid duplex option requirement in Node.js
       const original = new Request('https://example.com', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ test: true })
+        method: 'GET',
+        headers: { 'Content-Type': 'application/json' }
       })
       const cloned = cloneRequest(original)
       expect(cloned).toBeInstanceOf(Request)
