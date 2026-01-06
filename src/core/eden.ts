@@ -9,7 +9,6 @@
  */
 
 import type { ApiResponse, RequestConfig } from '../types'
-import type { TSchema, Static } from '@sinclair/typebox'
 
 // ============= 配置 =============
 
@@ -23,8 +22,11 @@ export interface EdenConfig {
 
 // ============= 基础类型工具 =============
 
-/** 从 TSchema 提取静态类型 */
-type InferStatic<T> = T extends TSchema ? Static<T> : T
+/**
+ * 从 TypeBox Schema 提取静态类型
+ * 使用 TypeBox 内部的 static 属性提取类型
+ */
+type InferStatic<T> = T extends { static: infer S } ? S : T
 
 /** 从 InferableHandler 提取返回类型 */
 type ExtractReturn<T> = T extends { __returnType: infer R } ? R : unknown

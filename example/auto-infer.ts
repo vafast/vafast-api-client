@@ -9,52 +9,8 @@
  * 3. 使用 eden<Api>() 创建类型安全的客户端
  */
 
-import { Type, TSchema, Static } from '@sinclair/typebox'
+import { defineRoutes, createHandler, Type } from 'vafast'
 import { eden, InferEden } from '../src'
-
-// ============= 类型定义（模拟 vafast 的类型，实际使用时从 vafast 导入） =============
-// 注意：这些类型定义是为了让示例能独立运行，实际项目中应该从 vafast 包导入
-
-interface RouteSchema {
-  body?: TSchema
-  query?: TSchema
-  params?: TSchema
-}
-
-/**
- * 可推断的 Handler 类型
- * __returnType 和 __schema 是类型标记，运行时不存在
- */
-type InferableHandler<TReturn, TSchema extends RouteSchema = RouteSchema> = 
-  ((req: Request) => Promise<Response>) & {
-    __returnType: TReturn
-    __schema: TSchema
-  }
-
-/**
- * 创建类型安全的路由处理器
- */
-function createHandler<const T extends RouteSchema, R>(
-  schema: T,
-  handler: (ctx: { body: any; query: any; params: any }) => R | Promise<R>
-): InferableHandler<Awaited<R>, T> {
-  // 实际实现会处理 schema 验证
-  return (() => Promise.resolve(new Response())) as unknown as InferableHandler<Awaited<R>, T>
-}
-
-/**
- * 定义路由数组，保留完整类型信息
- * 使用 const 泛型和 readonly 确保字面量类型被保留
- */
-function defineRoutes<
-  const T extends readonly {
-    readonly method: string
-    readonly path: string
-    readonly handler: unknown
-  }[]
->(routes: T): T {
-  return routes
-}
 
 // ============= 业务类型定义 =============
 
@@ -62,16 +18,6 @@ interface User {
   id: string
   name: string
   email: string
-}
-
-interface CreateUserInput {
-  name: string
-  email: string
-}
-
-interface UpdateUserInput {
-  name?: string
-  email?: string
 }
 
 // ============= 服务端：定义路由 =============
