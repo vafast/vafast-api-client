@@ -1,81 +1,42 @@
-// 核心 API 客户端
-export { VafastApiClient } from './core/api-client'
-export { 
-  createTypedClient, 
-  createRouteBasedClient, 
-  createSimpleClient,
-  type TypedApiClient 
-} from './core/typed-client'
+/**
+ * Vafast API Client
+ * 
+ * 类型安全的 Eden 风格 API 客户端
+ * 
+ * @example
+ * ```typescript
+ * import { eden, InferEden } from '@vafast/api-client'
+ * import { defineRoutes, route, createHandler, Type } from 'vafast'
+ * 
+ * // 定义路由（无需 as const）
+ * const routes = defineRoutes([
+ *   route('GET', '/users', createHandler(...)),
+ *   route('POST', '/users', createHandler(...))
+ * ])
+ * 
+ * // 自动推断类型
+ * type Api = InferEden<typeof routes>
+ * const api = eden<Api>('http://localhost:3000')
+ * 
+ * // 类型安全的调用
+ * const { data } = await api.users.get({ page: 1 })
+ * ```
+ */
 
-// Eden - 类型安全 API 客户端（推荐）
+// Eden 客户端（核心）
 export {
   eden,
   type EdenConfig,
   type EdenClient,
   type InferEden,
+  type SSEEvent,
+  type SSESubscribeOptions,
+  type SSESubscription,
 } from './core/eden'
-
-// WebSocket 客户端
-export { 
-  VafastWebSocketClient, 
-  createWebSocketClient, 
-  createTypedWebSocketClient 
-} from './websocket/websocket-client'
 
 // 类型定义
 export type {
-  // 基础类型
   HTTPMethod,
   RequestConfig,
   ApiResponse,
-  QueryParams,
-  PathParams,
-  RequestBody,
-  ApiClientConfig,
-  
-  // 类型推断
-  InferRouteHandler,
-  InferServer,
-  RoutePath,
-  RouteMethod,
-  RouteHandlerType,
-  
-  // WebSocket 类型
-  WebSocketEvent,
-  WebSocketClient,
-  
-  // 文件类型
-  FileUpload,
-  ApiFormData,
-  
-  // 中间件和拦截器
-  ApiMiddleware,
-  Interceptor,
-  
-  // 配置类型
-  CacheConfig,
-  RetryConfig,
-  LogConfig
 } from './types'
-
-// 工具函数
-export {
-  buildQueryString,
-  replacePathParams,
-  isFile,
-  isFileUpload,
-  hasFiles,
-  createFormData,
-  deepMerge,
-  delay,
-  exponentialBackoff,
-  validateStatus,
-  parseResponse,
-  createError,
-  cloneRequest,
-  isRetryableError
-} from './utils'
-
-// 默认导出
-import { VafastApiClient } from './core/api-client'
-export default VafastApiClient
