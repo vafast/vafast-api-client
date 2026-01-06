@@ -229,10 +229,18 @@ type RouteNode = {
 
 /** SSE 订阅回调 */
 interface SSECallbacks<T> {
+  /** 收到消息 */
   onMessage: (data: T) => void
+  /** 发生错误 */
   onError?: (error: Error) => void
+  /** 连接打开 */
   onOpen?: () => void
+  /** 连接关闭 */
   onClose?: () => void
+  /** 正在重连 */
+  onReconnect?: (attempt: number, maxAttempts: number) => void
+  /** 达到最大重连次数 */
+  onMaxReconnects?: () => void
 }
 
 /** 从方法定义提取调用签名 */
@@ -404,7 +412,33 @@ export function eden<T>(
       ...requestConfig?.headers,
     }
 
-    const fetchOptions: RequestInit = { method, headers }
+    // 支持用户传入的取消信号，或内部超时取消
+    const controller = new AbortController()
+    let timeoutId: ReturnType<typeof setTimeout> | undefined
+    
+    // 合并用户的 signal 和内部的超时 signal
+    const userSignal = requestConfig?.signal
+    const requestTimeout = requestConfig?.timeout ?? timeout
+    
+    if (userSignal) {
+      // 如果用户已取消，直接中止
+      if (userSignal.aborted) {
+        controller.abort()
+      } else {
+        // 监听用户取消
+        userSignal.addEventListener('abort', () => controller.abort())
+      }
+    }
+    
+    if (requestTimeout) {
+      timeoutId = setTimeout(() => controller.abort(), requestTimeout)
+    }
+
+    const fetchOptions: RequestInit = { 
+      method, 
+      headers,
+      signal: controller.signal 
+    }
 
     // Body
     if (method !== 'GET' && method !== 'HEAD' && data) {
@@ -418,14 +452,6 @@ export function eden<T>(
     }
 
     try {
-      const controller = new AbortController()
-      let timeoutId: ReturnType<typeof setTimeout> | undefined
-      
-      if (timeout) {
-        timeoutId = setTimeout(() => controller.abort(), timeout)
-        fetchOptions.signal = controller.signal
-      }
-
       const response = await fetch(req)
       
       if (timeoutId) clearTimeout(timeoutId)
@@ -469,7 +495,7 @@ export function eden<T>(
     }
   }
 
-  // SSE 订阅
+  // SSE 订阅（支持自动重连）
   function subscribe<TData>(
     path: string,
     query: Record<string, unknown> | undefined,
@@ -489,17 +515,36 @@ export function eden<T>(
 
     let abortController: AbortController | null = new AbortController()
     let connected = false
+    let reconnectCount = 0
+    let isUnsubscribed = false
+    let lastEventId: string | undefined
+    
+    // 重连配置
+    const reconnectInterval = options?.reconnectInterval ?? 3000
+    const maxReconnects = options?.maxReconnects ?? 5
 
     const connect = async () => {
+      if (isUnsubscribed) return
+      
       try {
+        // 重新创建 AbortController（重连时需要新的）
+        abortController = new AbortController()
+        
+        const headers: Record<string, string> = {
+          'Accept': 'text/event-stream',
+          ...defaultHeaders,
+          ...options?.headers,
+        }
+        
+        // SSE 规范：发送 Last-Event-ID 用于断点续传
+        if (lastEventId) {
+          headers['Last-Event-ID'] = lastEventId
+        }
+        
         const response = await fetch(url.toString(), {
           method: 'GET',
-          headers: {
-            'Accept': 'text/event-stream',
-            ...defaultHeaders,
-            ...options?.headers,
-          },
-          signal: abortController?.signal,
+          headers,
+          signal: abortController.signal,
         })
 
         if (!response.ok) {
@@ -510,12 +555,22 @@ export function eden<T>(
           throw new Error('No response body')
         }
 
+        // 连接成功，重置重连计数
         connected = true
+        reconnectCount = 0
         callbacks.onOpen?.()
 
         const reader = response.body.getReader()
         
         for await (const event of parseSSEStream(reader)) {
+          // 保存最后的事件 ID 用于重连
+          if (event.id) {
+            lastEventId = event.id
+          }
+          
+          // 服务端可以通过 retry 字段动态调整重连间隔
+          // 这里不改变配置，仅记录
+          
           if (event.event === 'error') {
             callbacks.onError?.(new Error(String(event.data)))
           } else {
@@ -523,12 +578,34 @@ export function eden<T>(
           }
         }
 
+        // 流正常结束
         connected = false
         callbacks.onClose?.()
+        
       } catch (error) {
         connected = false
-        if ((error as Error).name !== 'AbortError') {
-          callbacks.onError?.(error as Error)
+        
+        // 用户主动取消，不重连
+        if ((error as Error).name === 'AbortError' || isUnsubscribed) {
+          return
+        }
+        
+        callbacks.onError?.(error as Error)
+        
+        // 自动重连
+        if (reconnectCount < maxReconnects) {
+          reconnectCount++
+          callbacks.onReconnect?.(reconnectCount, maxReconnects)
+          
+          // 延迟后重连
+          setTimeout(() => {
+            if (!isUnsubscribed) {
+              connect()
+            }
+          }, reconnectInterval)
+        } else {
+          // 达到最大重连次数
+          callbacks.onMaxReconnects?.()
         }
       }
     }
@@ -537,6 +614,7 @@ export function eden<T>(
 
     return {
       unsubscribe: () => {
+        isUnsubscribed = true
         abortController?.abort()
         abortController = null
         connected = false

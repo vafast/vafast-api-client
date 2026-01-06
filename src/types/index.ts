@@ -41,7 +41,11 @@ export interface RouteHandler {
 export interface RequestConfig {
   headers?: Record<string, string>
   timeout?: number
+  /** 取消信号 - 用于取消请求 */
+  signal?: AbortSignal
+  /** @deprecated 重试次数（旧 API，eden 不使用） */
   retries?: number
+  /** @deprecated 重试延迟（旧 API，eden 不使用） */
   retryDelay?: number
   body?: RequestBody
 }

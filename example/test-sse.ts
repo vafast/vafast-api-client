@@ -1,6 +1,8 @@
 /**
  * SSE 端到端测试
- * 启动服务器并测试 SSE 流式响应
+ * 测试功能：
+ * 1. 请求取消 (AbortController)
+ * 2. SSE 自动重连
  */
 
 import { 
@@ -21,6 +23,15 @@ const routes = defineRoutes([
     async ({ query }) => ({ message: `Hello, ${query.name || 'World'}!` })
   )),
   
+  // 慢请求（用于测试取消）
+  route('GET', '/slow', createHandler(
+    {},
+    async () => {
+      await new Promise(r => setTimeout(r, 5000))
+      return { message: 'Slow response' }
+    }
+  )),
+  
   // SSE 流式响应
   route('GET', '/stream', createSSEHandler(
     { query: Type.Object({ count: Type.Optional(Type.Number({ default: 5 })) }) },
@@ -30,7 +41,7 @@ const routes = defineRoutes([
       yield { event: 'start', data: { message: '开始流式传输...' } }
       
       for (let i = 1; i <= count; i++) {
-        yield { data: { index: i, text: `消息 ${i}/${count}` } }
+        yield { id: String(i), data: { index: i, text: `消息 ${i}/${count}` } }
         await new Promise(r => setTimeout(r, 200))
       }
       
@@ -56,6 +67,17 @@ async function main() {
         })
       }
       
+      // 慢请求
+      if (url.pathname === '/slow') {
+        return new Promise(resolve => {
+          setTimeout(() => {
+            resolve(new Response(JSON.stringify({ message: 'Slow response' }), {
+              headers: { 'Content-Type': 'application/json' }
+            }))
+          }, 5000)
+        })
+      }
+      
       if (url.pathname === '/stream') {
         const count = parseInt(url.searchParams.get('count') || '5')
         
@@ -66,7 +88,7 @@ async function main() {
             controller.enqueue(encoder.encode(`event: start\ndata: ${JSON.stringify({ message: '开始流式传输...' })}\n\n`))
             
             for (let i = 1; i <= count; i++) {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ index: i, text: `消息 ${i}/${count}` })}\n\n`))
+              controller.enqueue(encoder.encode(`id: ${i}\ndata: ${JSON.stringify({ index: i, text: `消息 ${i}/${count}` })}\n\n`))
               await new Promise(r => setTimeout(r, 200))
             }
             
@@ -97,43 +119,74 @@ async function main() {
   // 创建客户端
   const api = eden<Api>('http://localhost:3456')
   
-  // 测试普通请求
-  console.log('📡 测试普通请求...')
-  const result = await api.hello.get({ name: 'TypeScript' })
-  console.log('响应:', result.data)
+  // ============= 测试 1: 请求取消 =============
+  console.log('🧪 测试 1: 请求取消')
+  
+  const controller = new AbortController()
+  
+  // 发起慢请求
+  const slowPromise = api.slow.get(undefined, { signal: controller.signal })
+  
+  // 100ms 后取消
+  setTimeout(() => {
+    controller.abort()
+    console.log('   ⏹️ 请求已取消')
+  }, 100)
+  
+  const result = await slowPromise
+  // 取消后 status 为 0，error 可能是 AbortError 或 "This operation was aborted"
+  if (result.status === 0 && result.error) {
+    console.log('   ✅ 请求取消成功 (error:', result.error.message || result.error.name, ')\n')
+  } else {
+    console.log('   ❌ 请求取消失败: status=', result.status, '\n')
+  }
+  
+  // ============= 测试 2: 普通请求 =============
+  console.log('🧪 测试 2: 普通请求')
+  const helloResult = await api.hello.get({ name: 'TypeScript' })
+  console.log('   响应:', helloResult.data)
   console.log()
   
-  // 测试 SSE
-  console.log('🌊 测试 SSE 流式响应...')
+  // ============= 测试 3: SSE 流式响应 =============
+  console.log('🧪 测试 3: SSE 流式响应')
   
   await new Promise<void>((resolve) => {
     const sub = api.stream.subscribe(
       { count: 3 },
       {
-        onOpen: () => console.log('📡 SSE 连接已建立'),
+        onOpen: () => console.log('   📡 连接已建立'),
         onMessage: (data: unknown) => {
-          console.log('📨 收到:', data)
+          console.log('   📨', data)
         },
-        onError: (err) => console.error('❌ 错误:', err.message),
+        onError: (err) => console.log('   ❌ 错误:', err.message),
         onClose: () => {
-          console.log('📴 SSE 连接已关闭')
+          console.log('   📴 连接已关闭')
           resolve()
+        },
+        onReconnect: (attempt, max) => {
+          console.log(`   🔄 重连中 (${attempt}/${max})...`)
+        },
+        onMaxReconnects: () => {
+          console.log('   ⚠️ 达到最大重连次数')
         }
+      },
+      {
+        reconnectInterval: 1000,
+        maxReconnects: 3
       }
     )
     
-    // 3 秒超时
+    // 5 秒超时
     setTimeout(() => {
       sub.unsubscribe()
       resolve()
-    }, 3000)
+    }, 5000)
   })
   
-  console.log('\n✅ 测试完成!')
+  console.log('\n✅ 所有测试完成!')
   
   // 关闭服务器
   server.stop()
 }
 
 main().catch(console.error)
-
