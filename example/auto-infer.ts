@@ -1,15 +1,23 @@
 /**
  * ✨ 自动从 vafast 路由推断契约
  * 
- * 无需手动定义契约！类型完全自动推断
- * 
- * 使用方式：
- * 1. 在服务端使用 defineRoutes + createHandler 定义路由
- * 2. 使用 InferEden<typeof routes> 自动推断契约类型
- * 3. 使用 eden<Api>() 创建类型安全的客户端
+ * 特性：
+ * 1. 使用 route() 函数，无需 as const
+ * 2. 支持 SSE 流式响应
+ * 3. 完整的类型推断
  */
 
-import { defineRoutes, createHandler, Type } from 'vafast'
+import { 
+  defineRoutes, 
+  route, 
+  get, 
+  post, 
+  put, 
+  del,
+  createHandler, 
+  createSSEHandler,
+  Type 
+} from 'vafast'
 import { eden, InferEden } from '../src'
 
 // ============= 业务类型定义 =============
@@ -20,97 +28,96 @@ interface User {
   email: string
 }
 
+interface ChatMessage {
+  text: string
+  timestamp?: number
+}
+
 // ============= 服务端：定义路由 =============
 
 /**
- * 使用 as const 保留字面量类型
- * 这是自动类型推断的关键！
+ * ✨ 新方式：使用 route() 函数，无需 as const！
  */
 const routes = defineRoutes([
   // GET /users - 获取用户列表
-  {
-    method: 'GET',
-    path: '/users',
-    handler: createHandler(
-      { 
-        query: Type.Object({ 
-          page: Type.Optional(Type.Number({ default: 1 })), 
-          limit: Type.Optional(Type.Number({ default: 10 })) 
-        }) 
-      },
-      async ({ query }) => ({ 
-        users: [] as User[], 
-        total: 0,
-        page: query.page ?? 1,
-        limit: query.limit ?? 10
-      })
-    )
-  },
+  route('GET', '/users', createHandler(
+    { query: Type.Object({ 
+      page: Type.Optional(Type.Number({ default: 1 })), 
+      limit: Type.Optional(Type.Number({ default: 10 })) 
+    })},
+    async ({ query }) => ({ 
+      users: [] as User[], 
+      total: 0,
+      page: query.page ?? 1,
+      limit: query.limit ?? 10
+    })
+  )),
   
   // POST /users - 创建用户
-  {
-    method: 'POST',
-    path: '/users',
-    handler: createHandler(
-      { body: Type.Object({ name: Type.String(), email: Type.String() }) },
-      async ({ body }) => ({ 
-        id: crypto.randomUUID(), 
-        name: body.name, 
-        email: body.email 
-      } as User)
-    )
-  },
+  route('POST', '/users', createHandler(
+    { body: Type.Object({ name: Type.String(), email: Type.String() }) },
+    async ({ body }) => ({ 
+      id: crypto.randomUUID(), 
+      name: body.name, 
+      email: body.email 
+    } as User)
+  )),
   
   // GET /users/:id - 获取单个用户
-  {
-    method: 'GET',
-    path: '/users/:id',
-    handler: createHandler(
-      { params: Type.Object({ id: Type.String() }) },
-      async ({ params }) => ({ 
-        id: params.id, 
-        name: 'User', 
-        email: 'user@example.com' 
-      } as User | null)
-    )
-  },
+  route('GET', '/users/:id', createHandler(
+    { params: Type.Object({ id: Type.String() }) },
+    async ({ params }) => ({ 
+      id: params.id, 
+      name: 'User', 
+      email: 'user@example.com' 
+    } as User | null)
+  )),
   
-  // PUT /users/:id - 更新用户
-  {
-    method: 'PUT',
-    path: '/users/:id',
-    handler: createHandler(
-      { 
-        params: Type.Object({ id: Type.String() }), 
-        body: Type.Object({ 
-          name: Type.Optional(Type.String()), 
-          email: Type.Optional(Type.String()) 
-        }) 
-      },
-      async ({ params, body }) => ({ 
-        id: params.id, 
-        name: body?.name ?? 'User', 
-        email: body?.email ?? 'user@example.com' 
-      } as User)
-    )
-  },
+  // PUT /users/:id - 更新用户（使用快捷方法）
+  put('/users/:id', createHandler(
+    { 
+      params: Type.Object({ id: Type.String() }), 
+      body: Type.Object({ 
+        name: Type.Optional(Type.String()), 
+        email: Type.Optional(Type.String()) 
+      }) 
+    },
+    async ({ params, body }) => ({ 
+      id: params.id, 
+      name: body?.name ?? 'User', 
+      email: body?.email ?? 'user@example.com' 
+    } as User)
+  )),
   
-  // DELETE /users/:id - 删除用户
-  {
-    method: 'DELETE',
-    path: '/users/:id',
-    handler: createHandler(
-      { params: Type.Object({ id: Type.String() }) },
-      async () => ({ success: true, deletedAt: new Date().toISOString() })
-    )
-  }
-] as const)
+  // DELETE /users/:id - 删除用户（使用快捷方法）
+  del('/users/:id', createHandler(
+    { params: Type.Object({ id: Type.String() }) },
+    async () => ({ success: true, deletedAt: new Date().toISOString() })
+  )),
+
+  // 🌊 GET /chat/stream - SSE 流式响应
+  route('GET', '/chat/stream', createSSEHandler(
+    { query: Type.Object({ prompt: Type.String() }) },
+    async function* ({ query }) {
+      // 模拟 AI 流式响应
+      yield { event: 'start', data: { message: 'Starting...' } }
+      
+      const words = `Hello! You said: "${query.prompt}"`.split(' ')
+      for (const word of words) {
+        yield { data: { text: word + ' ' } as ChatMessage }
+        await new Promise(r => setTimeout(r, 100))
+      }
+      
+      yield { event: 'end', data: { message: 'Done!' } }
+    }
+  ))
+])
 
 // ============= 🎉 自动推断契约类型！=============
 
 /**
  * 从路由定义自动推断 API 契约
- * 无需手动定义任何接口！
+ * 无需手动定义任何接口！无需 as const！
  */
 type Api = InferEden<typeof routes>
 
@@ -127,58 +134,64 @@ const api = eden<Api>('http://localhost:3000', {
 })
 
 async function main() {
-  console.log('=== 自动推断契约示例 ===\n')
+  console.log('=== 自动推断契约示例（无需 as const）===\n')
 
   // ✅ GET /users?page=1&limit=10
-  // query 参数自动推断为 { page?: number; limit?: number }
-  // 返回值自动推断为 { users: User[]; total: number; page: number; limit: number }
   const usersResult = await api.users.get({ page: 1, limit: 10 })
   if (usersResult.data) {
     console.log('📋 用户列表:', usersResult.data.users)
     console.log('   总数:', usersResult.data.total)
-    console.log('   页码:', usersResult.data.page)
   }
 
   // ✅ POST /users
-  // body 自动推断为 { name: string; email: string }
-  // 返回值自动推断为 User
   const newUserResult = await api.users.post({ 
     name: 'John Doe', 
     email: 'john@example.com' 
   })
   if (newUserResult.data) {
-    console.log('\n✨ 新用户创建成功!')
-    console.log('   ID:', newUserResult.data.id)
-    console.log('   姓名:', newUserResult.data.name)
-    console.log('   邮箱:', newUserResult.data.email)
+    console.log('\n✨ 新用户:', newUserResult.data.name)
   }
 
   // ✅ GET /users/:id
-  // 路径参数通过函数调用传入
-  // 返回值自动推断为 User | null
   const userResult = await api.users({ id: '123' }).get()
   if (userResult.data) {
     console.log('\n👤 用户详情:', userResult.data.name)
   }
 
   // ✅ PUT /users/:id
-  // body 自动推断为 { name?: string; email?: string }
-  const updateResult = await api.users({ id: '123' }).put({ 
-    name: 'Jane Doe' 
-  })
+  const updateResult = await api.users({ id: '123' }).put({ name: 'Jane' })
   if (updateResult.data) {
-    console.log('\n📝 用户更新成功:', updateResult.data.name)
+    console.log('\n📝 更新后:', updateResult.data.name)
   }
 
   // ✅ DELETE /users/:id
-  // 返回值自动推断为 { success: boolean; deletedAt: string }
   const deleteResult = await api.users({ id: '123' }).delete()
   if (deleteResult.data) {
-    console.log('\n🗑️ 用户删除成功:', deleteResult.data.success)
-    console.log('   删除时间:', deleteResult.data.deletedAt)
+    console.log('\n🗑️ 删除成功:', deleteResult.data.success)
   }
 
-  console.log('\n=== 示例完成 ===')
+  // 🌊 SSE 流式响应
+  console.log('\n=== SSE 流式响应 ===\n')
+  
+  // SSE 返回类型目前是 unknown，需要手动断言
+  // 未来版本会改进 SSE 返回类型推断
+  const subscription = api.chat.stream.subscribe(
+    { prompt: 'Hello AI!' },
+    {
+      onOpen: () => console.log('📡 连接已建立'),
+      onMessage: (data: unknown) => {
+        console.log('收到消息:', data)
+      },
+      onError: (err) => console.error('❌ 错误:', err.message),
+      onClose: () => console.log('📴 连接已关闭')
+    }
+  )
+
+  // 5 秒后取消订阅
+  setTimeout(() => {
+    subscription.unsubscribe()
+    console.log('\n\n=== 示例完成 ===')
+  }, 5000)
 }
 
 main().catch(console.error)

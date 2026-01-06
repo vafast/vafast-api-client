@@ -6,6 +6,7 @@
  * - api.users.post({ name })     // POST /users
  * - api.users({ id }).get()      // GET /users/:id
  * - api.users({ id }).delete()   // DELETE /users/:id
+ * - api.chat.stream.subscribe()  // SSE 流式响应
  */
 
 import type { ApiResponse, RequestConfig } from '../types'
@@ -18,6 +19,42 @@ export interface EdenConfig {
   onResponse?: <T>(response: ApiResponse<T>) => ApiResponse<T> | Promise<ApiResponse<T>>
   onError?: (error: Error) => void
   timeout?: number
+}
+
+// ============= SSE 类型 =============
+
+/**
+ * SSE 事件
+ */
+export interface SSEEvent<T = unknown> {
+  event?: string
+  data: T
+  id?: string
+  retry?: number
+}
+
+/**
+ * SSE 订阅选项
+ */
+export interface SSESubscribeOptions {
+  /** 自定义请求头 */
+  headers?: Record<string, string>
+  /** 重连间隔（毫秒） */
+  reconnectInterval?: number
+  /** 最大重连次数 */
+  maxReconnects?: number
+  /** 连接超时（毫秒） */
+  timeout?: number
+}
+
+/**
+ * SSE 订阅结果
+ */
+export interface SSESubscription<T = unknown> {
+  /** 取消订阅 */
+  unsubscribe: () => void
+  /** 是否已连接 */
+  readonly connected: boolean
 }
 
 // ============= 基础类型工具 =============
@@ -33,6 +70,9 @@ type ExtractReturn<T> = T extends { __returnType: infer R } ? R : unknown
 
 /** 从 InferableHandler 提取 Schema */
 type ExtractSchema<T> = T extends { __schema: infer S } ? S : {}
+
+/** 检查是否是 SSE Handler（使用品牌类型检测） */
+type IsSSEHandler<T> = T extends { __sse: { readonly __brand: 'SSE' } } ? true : false
 
 /** 从 Schema 提取各部分类型 */
 type GetQuery<S> = S extends { query: infer Q } ? InferStatic<Q> : undefined
@@ -58,13 +98,24 @@ type IsDynamicSegment<S extends string> = S extends `:${string}` ? true : false
 /** 清理 undefined 字段 */
 type Clean<T> = { [K in keyof T as T[K] extends undefined ? never : K]: T[K] }
 
+/** SSE 标记类型 */
+type SSEBrand = { readonly __brand: 'SSE' }
+
 /** 从路由构建方法定义 */
-type BuildMethodDef<R extends { readonly handler: unknown }> = Clean<{
-  query: GetQuery<ExtractSchema<R['handler']>>
-  body: GetBody<ExtractSchema<R['handler']>>
-  params: GetParams<ExtractSchema<R['handler']>>
-  return: ExtractReturn<R['handler']>
-}>
+type BuildMethodDef<R extends { readonly handler: unknown }> = 
+  IsSSEHandler<R['handler']> extends true
+    ? Clean<{
+        query: GetQuery<ExtractSchema<R['handler']>>
+        params: GetParams<ExtractSchema<R['handler']>>
+        return: ExtractReturn<R['handler']>
+        sse: SSEBrand
+      }>
+    : Clean<{
+        query: GetQuery<ExtractSchema<R['handler']>>
+        body: GetBody<ExtractSchema<R['handler']>>
+        params: GetParams<ExtractSchema<R['handler']>>
+        return: ExtractReturn<R['handler']>
+      }>
 
 /**
  * 递归构建嵌套路径结构
@@ -119,26 +170,34 @@ type MergeRoutes<T extends readonly unknown[]> =
  * 
  * @example
  * ```typescript
- * import { defineRoutes, createHandler } from 'vafast'
- * import { Type } from 'vafast'
+ * import { defineRoutes, route, createHandler, Type } from 'vafast'
  * import { eden, InferEden } from 'vafast-api-client'
  * 
+ * // ✨ 使用 route() 函数，无需 as const
  * const routes = defineRoutes([
- *   {
- *     method: 'GET',
- *     path: '/users',
- *     handler: createHandler(
- *       { query: Type.Object({ page: Type.Number() }) },
- *       async ({ query }) => ({ users: [], total: 0 })
- *     )
- *   }
- * ] as const)
+ *   route('GET', '/users', createHandler(
+ *     { query: Type.Object({ page: Type.Number() }) },
+ *     async ({ query }) => ({ users: [], total: 0 })
+ *   )),
+ *   route('GET', '/chat/stream', createSSEHandler(
+ *     { query: Type.Object({ prompt: Type.String() }) },
+ *     async function* ({ query }) {
+ *       yield { data: { text: 'Hello' } }
+ *     }
+ *   ))
+ * ])
  * 
  * type Api = InferEden<typeof routes>
  * const api = eden<Api>('http://localhost:3000')
  * 
- * // 完全类型安全的调用
+ * // 普通请求
  * const { data } = await api.users.get({ page: 1 })
+ * 
+ * // SSE 流式请求
+ * api.chat.stream.subscribe({ prompt: 'Hi' }, {
+ *   onMessage: (data) => console.log(data),
+ *   onError: (err) => console.error(err)
+ * })
  * ```
  */
 export type InferEden<T extends readonly { readonly method: string; readonly path: string; readonly handler: unknown }[]> = 
@@ -152,6 +211,7 @@ interface MethodDef {
   body?: unknown
   params?: unknown
   return: unknown
+  sse?: SSEBrand
 }
 
 /** 路由节点 */
@@ -167,43 +227,119 @@ type RouteNode = {
 
 // ============= 客户端类型 =============
 
+/** SSE 订阅回调 */
+interface SSECallbacks<T> {
+  onMessage: (data: T) => void
+  onError?: (error: Error) => void
+  onOpen?: () => void
+  onClose?: () => void
+}
+
 /** 从方法定义提取调用签名 */
 type MethodCall<M extends MethodDef, HasParams extends boolean = false> = 
-  HasParams extends true
-    ? M extends { body: infer B }
-      ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
-      : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
-    : M extends { query: infer Q }
-      ? (query?: Q, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
-      : M extends { body: infer B }
+  M extends { sse: SSEBrand }
+    ? M extends { query: infer Q }
+      ? (query: Q, callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
+      : (callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
+    : HasParams extends true
+      ? M extends { body: infer B }
         ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
         : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
+      : M extends { query: infer Q }
+        ? (query?: Q, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
+        : M extends { body: infer B }
+          ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
+          : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
 
-/** 端点类型 */
-type Endpoint<T, HasParams extends boolean = false> = {
-  [K in 'get' | 'post' | 'put' | 'patch' | 'delete' as T extends { [P in K]: MethodDef } ? K : never]: 
-    T extends { [P in K]: infer M extends MethodDef } ? MethodCall<M, HasParams> : never
-}
+/** 检查是否是 SSE 端点（检测品牌类型标记） */
+type IsSSEEndpoint<M> = M extends { sse: { readonly __brand: 'SSE' } } ? true : false
+
+/** 端点类型 - 包含 subscribe 方法用于 SSE */
+type Endpoint<T, HasParams extends boolean = false> = 
+  // HTTP 方法
+  {
+    [K in 'get' | 'post' | 'put' | 'patch' | 'delete' as T extends { [P in K]: MethodDef } ? K : never]: 
+      T extends { [P in K]: infer M extends MethodDef } ? MethodCall<M, HasParams> : never
+  } 
+  // SSE subscribe 方法（如果 GET 是 SSE）
+  & (T extends { get: infer M extends MethodDef }
+      ? IsSSEEndpoint<M> extends true 
+        ? { subscribe: MethodCall<M, HasParams> }
+        : {}
+      : {})
 
 /** 检查节点是否有动态参数子路由 */
 type HasDynamicChild<T> = T extends { ':id': unknown } ? true : false
-
-/** 参数化端点 */
-type ParamEndpoint<T> = 
-  HasDynamicChild<T> extends true
-    ? T extends { ':id': infer Child }
-      ? ((params: Record<string, string>) => EdenClient<Child, true>) & Endpoint<T, false>
-      : Endpoint<T, false>
-    : Endpoint<T, false>
 
 /** HTTP 方法名 */
 type HTTPMethods = 'get' | 'post' | 'put' | 'patch' | 'delete'
 
 /** 递归构建客户端类型 */
 export type EdenClient<T, HasParams extends boolean = false> = {
+  // 嵌套路径（排除 HTTP 方法和动态参数）
   [K in keyof T as K extends HTTPMethods | `:${string}` ? never : K]: 
-    ParamEndpoint<T[K]>
+    T[K] extends { ':id': infer Child }
+      // 有动态参数子路由
+      ? ((params: Record<string, string>) => EdenClient<Child, true>) & EdenClient<T[K], false>
+      // 普通嵌套路由
+      : EdenClient<T[K], false>
 } & Endpoint<T, HasParams>
+
+// ============= SSE 解析器 =============
+
+/**
+ * 解析 SSE 事件流
+ */
+async function* parseSSEStream(
+  reader: ReadableStreamDefaultReader<Uint8Array>
+): AsyncGenerator<SSEEvent, void, unknown> {
+  const decoder = new TextDecoder();
+  let buffer = '';
+  
+  while (true) {
+    const { done, value } = await reader.read();
+    
+    if (done) break;
+    
+    buffer += decoder.decode(value, { stream: true });
+    
+    // 按双换行分割事件
+    const events = buffer.split('\n\n');
+    buffer = events.pop() || ''; // 保留未完成的部分
+    
+    for (const eventStr of events) {
+      if (!eventStr.trim()) continue;
+      
+      const event: SSEEvent = { data: '' };
+      const lines = eventStr.split('\n');
+      let dataLines: string[] = [];
+      
+      for (const line of lines) {
+        if (line.startsWith('event:')) {
+          event.event = line.slice(6).trim();
+        } else if (line.startsWith('data:')) {
+          dataLines.push(line.slice(5).trim());
+        } else if (line.startsWith('id:')) {
+          event.id = line.slice(3).trim();
+        } else if (line.startsWith('retry:')) {
+          event.retry = parseInt(line.slice(6).trim(), 10);
+        }
+      }
+      
+      // 合并多行 data
+      const dataStr = dataLines.join('\n');
+      
+      // 尝试解析 JSON
+      try {
+        event.data = JSON.parse(dataStr);
+      } catch {
+        event.data = dataStr;
+      }
+      
+      yield event;
+    }
+  }
+}
 
 // ============= 实现 =============
 
@@ -216,18 +352,26 @@ export type EdenClient<T, HasParams extends boolean = false> = {
  * 
  * @example
  * ```typescript
- * // 使用自动推断的契约
+ * // 使用自动推断的契约（无需 as const）
+ * const routes = defineRoutes([
+ *   route('GET', '/users', createHandler(...)),
+ *   route('GET', '/chat/stream', createSSEHandler(...))
+ * ])
+ * 
  * type Api = InferEden<typeof routes>
  * const api = eden<Api>('http://localhost:3000')
  * 
- * // 或手动定义契约
- * interface MyApi {
- *   users: {
- *     get: { return: User[] }
- *     post: { body: CreateUser; return: User }
- *   }
- * }
- * const api = eden<MyApi>('http://localhost:3000')
+ * // 普通请求
+ * const { data } = await api.users.get({ page: 1 })
+ * 
+ * // SSE 流式请求
+ * const sub = api.chat.stream.subscribe({ prompt: 'Hello' }, {
+ *   onMessage: (data) => console.log(data),
+ *   onError: (err) => console.error(err)
+ * })
+ * 
+ * // 取消订阅
+ * sub.unsubscribe()
  * ```
  */
 export function eden<T>(
@@ -236,7 +380,7 @@ export function eden<T>(
 ): EdenClient<T> {
   const { headers: defaultHeaders, onRequest, onResponse, onError, timeout } = config ?? {}
 
-  // 发送请求
+  // 发送普通请求
   async function request<TReturn>(
     method: string,
     path: string,
@@ -325,6 +469,84 @@ export function eden<T>(
     }
   }
 
+  // SSE 订阅
+  function subscribe<TData>(
+    path: string,
+    query: Record<string, unknown> | undefined,
+    callbacks: SSECallbacks<TData>,
+    options?: SSESubscribeOptions
+  ): SSESubscription<TData> {
+    const url = new URL(path, baseURL)
+    
+    // 添加 query 参数
+    if (query) {
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined && value !== null) {
+          url.searchParams.set(key, String(value))
+        }
+      }
+    }
+
+    let abortController: AbortController | null = new AbortController()
+    let connected = false
+
+    const connect = async () => {
+      try {
+        const response = await fetch(url.toString(), {
+          method: 'GET',
+          headers: {
+            'Accept': 'text/event-stream',
+            ...defaultHeaders,
+            ...options?.headers,
+          },
+          signal: abortController?.signal,
+        })
+
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`)
+        }
+
+        if (!response.body) {
+          throw new Error('No response body')
+        }
+
+        connected = true
+        callbacks.onOpen?.()
+
+        const reader = response.body.getReader()
+        
+        for await (const event of parseSSEStream(reader)) {
+          if (event.event === 'error') {
+            callbacks.onError?.(new Error(String(event.data)))
+          } else {
+            callbacks.onMessage(event.data as TData)
+          }
+        }
+
+        connected = false
+        callbacks.onClose?.()
+      } catch (error) {
+        connected = false
+        if ((error as Error).name !== 'AbortError') {
+          callbacks.onError?.(error as Error)
+        }
+      }
+    }
+
+    connect()
+
+    return {
+      unsubscribe: () => {
+        abortController?.abort()
+        abortController = null
+        connected = false
+      },
+      get connected() {
+        return connected
+      }
+    }
+  }
+
   // 创建端点代理
   function createEndpoint(basePath: string): unknown {
     const methods = ['get', 'post', 'put', 'patch', 'delete']
@@ -343,6 +565,34 @@ export function eden<T>(
           const httpMethod = prop.toUpperCase()
           return (data?: unknown, cfg?: RequestConfig) => {
             return request(httpMethod, basePath, data, cfg)
+          }
+        }
+        
+        // SSE 订阅
+        if (prop === 'subscribe') {
+          return <TData>(
+            queryOrCallbacks: Record<string, unknown> | SSECallbacks<TData>,
+            callbacksOrOptions?: SSECallbacks<TData> | SSESubscribeOptions,
+            options?: SSESubscribeOptions
+          ) => {
+            // 判断第一个参数是 query 还是 callbacks
+            if (typeof queryOrCallbacks === 'object' && 'onMessage' in queryOrCallbacks) {
+              // subscribe(callbacks, options)
+              return subscribe<TData>(
+                basePath, 
+                undefined, 
+                queryOrCallbacks as SSECallbacks<TData>,
+                callbacksOrOptions as SSESubscribeOptions
+              )
+            } else {
+              // subscribe(query, callbacks, options)
+              return subscribe<TData>(
+                basePath,
+                queryOrCallbacks as Record<string, unknown>,
+                callbacksOrOptions as SSECallbacks<TData>,
+                options
+              )
+            }
           }
         }
         
