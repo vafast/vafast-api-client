@@ -120,7 +120,7 @@ type MergeRoutes<T extends readonly unknown[]> =
  * @example
  * ```typescript
  * import { defineRoutes, createHandler } from 'vafast'
- * import { Type } from '@sinclair/typebox'
+ * import { Type } from 'vafast'
  * import { eden, InferEden } from 'vafast-api-client'
  * 
  * const routes = defineRoutes([
