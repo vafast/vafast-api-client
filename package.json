@@ -40,13 +40,13 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/vafastjs/vafast-api-client"
+    "url": "https://github.com/vafast/vafast-api-client"
   },
   "author": {
     "name": "Vafast Team",
-    "url": "https://github.com/vafastjs",
+    "url": "https://github.com/vafast",
     "email": "team@vafast.dev"
   },
-  "homepage": "https://github.com/vafastjs/vafast-api-client",
-  "bugs": "https://github.com/vafastjs/vafast-api-client/issues"
+  "homepage": "https://github.com/vafast/vafast-api-client",
+  "bugs": "https://github.com/vafast/vafast-api-client/issues"
 }
