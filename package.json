@@ -10,10 +10,10 @@
     "release": "npm run build && npm run test && npx bumpp && npm publish --access=public"
   },
   "peerDependencies": {
-    "vafast": ">=0.3.11"
+    "vafast": ">=0.4.23"
   },
   "devDependencies": {
-    "vafast": ">=0.3.11",
+    "vafast": ">=0.4.23",
     "tsdown": "^0.19.0-beta.4",
     "typescript": "^5.5.3",
     "vitest": "^2.1.8"

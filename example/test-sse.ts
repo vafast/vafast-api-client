@@ -7,7 +7,6 @@
 
 import { 
   defineRoutes, 
-  route, 
   createHandler, 
   createSSEHandler,
   Type,
@@ -18,36 +17,48 @@ import { eden, InferEden } from '../src'
 // 定义路由
 const routes = defineRoutes([
   // 普通 GET 请求
-  route('GET', '/hello', createHandler(
-    { query: Type.Object({ name: Type.Optional(Type.String()) }) },
-    async ({ query }) => ({ message: `Hello, ${query.name || 'World'}!` })
-  )),
+  {
+    method: 'GET',
+    path: '/hello',
+    handler: createHandler(
+      { query: Type.Object({ name: Type.Optional(Type.String()) }) },
+      async ({ query }) => ({ message: `Hello, ${query.name || 'World'}!` })
+    )
+  },
   
   // 慢请求（用于测试取消）
-  route('GET', '/slow', createHandler(
-    {},
-    async () => {
-      await new Promise(r => setTimeout(r, 5000))
-      return { message: 'Slow response' }
-    }
-  )),
+  {
+    method: 'GET',
+    path: '/slow',
+    handler: createHandler(
+      {},
+      async () => {
+        await new Promise(r => setTimeout(r, 5000))
+        return { message: 'Slow response' }
+      }
+    )
+  },
   
   // SSE 流式响应
-  route('GET', '/stream', createSSEHandler(
-    { query: Type.Object({ count: Type.Optional(Type.Number({ default: 5 })) }) },
-    async function* ({ query }) {
-      const count = query.count ?? 5
-      
-      yield { event: 'start', data: { message: '开始流式传输...' } }
-      
-      for (let i = 1; i <= count; i++) {
-        yield { id: String(i), data: { index: i, text: `消息 ${i}/${count}` } }
-        await new Promise(r => setTimeout(r, 200))
+  {
+    method: 'GET',
+    path: '/stream',
+    handler: createSSEHandler(
+      { query: Type.Object({ count: Type.Optional(Type.Number({ default: 5 })) }) },
+      async function* ({ query }) {
+        const count = query.count ?? 5
+        
+        yield { event: 'start', data: { message: '开始流式传输...' } }
+        
+        for (let i = 1; i <= count; i++) {
+          yield { id: String(i), data: { index: i, text: `消息 ${i}/${count}` } }
+          await new Promise(r => setTimeout(r, 200))
+        }
+        
+        yield { event: 'end', data: { message: '传输完成!' } }
       }
-      
-      yield { event: 'end', data: { message: '传输完成!' } }
-    }
-  ))
+    )
+  }
 ])
 
 type Api = InferEden<typeof routes>
@@ -125,7 +136,7 @@ async function main() {
   const controller = new AbortController()
   
   // 发起慢请求
-  const slowPromise = api.slow.get(undefined, { signal: controller.signal })
+  const slowPromise = api.slow.get({ signal: controller.signal })
   
   // 100ms 后取消
   setTimeout(() => {
