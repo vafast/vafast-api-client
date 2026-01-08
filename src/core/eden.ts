@@ -170,21 +170,29 @@ type MergeRoutes<T extends readonly unknown[]> =
  * 
  * @example
  * ```typescript
- * import { defineRoutes, route, createHandler, Type } from 'vafast'
+ * import { defineRoutes, createHandler, Type } from 'vafast'
  * import { eden, InferEden } from 'vafast-api-client'
  * 
- * // ✨ 使用 route() 函数，无需 as const
+ * // ✨ defineRoutes() 自动保留字面量类型，无需 as const
  * const routes = defineRoutes([
- *   route('GET', '/users', createHandler(
- *     { query: Type.Object({ page: Type.Number() }) },
- *     async ({ query }) => ({ users: [], total: 0 })
- *   )),
- *   route('GET', '/chat/stream', createSSEHandler(
- *     { query: Type.Object({ prompt: Type.String() }) },
- *     async function* ({ query }) {
- *       yield { data: { text: 'Hello' } }
- *     }
- *   ))
+ *   {
+ *     method: 'GET',
+ *     path: '/users',
+ *     handler: createHandler(
+ *       { query: Type.Object({ page: Type.Number() }) },
+ *       async ({ query }) => ({ users: [], total: 0 })
+ *     )
+ *   },
+ *   {
+ *     method: 'GET',
+ *     path: '/chat/stream',
+ *     handler: createSSEHandler(
+ *       { query: Type.Object({ prompt: Type.String() }) },
+ *       async function* ({ query }) {
+ *         yield { data: { text: 'Hello' } }
+ *       }
+ *     )
+ *   }
  * ])
  * 
  * type Api = InferEden<typeof routes>

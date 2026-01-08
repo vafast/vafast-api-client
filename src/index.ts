@@ -6,12 +6,12 @@
  * @example
  * ```typescript
  * import { eden, InferEden } from '@vafast/api-client'
- * import { defineRoutes, route, createHandler, Type } from 'vafast'
+ * import { defineRoutes, createHandler, Type } from 'vafast'
  * 
- * // 定义路由（无需 as const）
+ * // 定义路由（无需 as const，自动保留字面量类型）
  * const routes = defineRoutes([
- *   route('GET', '/users', createHandler(...)),
- *   route('POST', '/users', createHandler(...))
+ *   { method: 'GET', path: '/users', handler: createHandler(...) },
+ *   { method: 'POST', path: '/users', handler: createHandler(...) }
  * ])
  * 
  * // 自动推断类型

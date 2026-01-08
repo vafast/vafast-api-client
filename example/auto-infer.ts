@@ -2,18 +2,13 @@
  * ✨ 自动从 vafast 路由推断契约
  * 
  * 特性：
- * 1. 使用 route() 函数，无需 as const
+ * 1. 使用 defineRoutes() 自动保留字面量类型
  * 2. 支持 SSE 流式响应
  * 3. 完整的类型推断
  */
 
 import { 
   defineRoutes, 
-  route, 
-  get, 
-  post, 
-  put, 
-  del,
   createHandler, 
   createSSEHandler,
   Type 
@@ -36,81 +31,107 @@ interface ChatMessage {
 // ============= 服务端：定义路由 =============
 
 /**
- * ✨ 新方式：使用 route() 函数，无需 as const！
+ * ✨ defineRoutes() 自动保留字面量类型，无需 as const！
  */
 const routes = defineRoutes([
   // GET /users - 获取用户列表
-  route('GET', '/users', createHandler(
-    { query: Type.Object({ 
-      page: Type.Optional(Type.Number({ default: 1 })), 
-      limit: Type.Optional(Type.Number({ default: 10 })) 
-    })},
-    async ({ query }) => ({ 
-      users: [] as User[], 
-      total: 0,
-      page: query.page ?? 1,
-      limit: query.limit ?? 10
-    })
-  )),
+  {
+    method: 'GET',
+    path: '/users',
+    handler: createHandler(
+      { 
+        query: Type.Object({ 
+          page: Type.Optional(Type.Number({ default: 1 })), 
+          limit: Type.Optional(Type.Number({ default: 10 })) 
+        })
+      },
+      async ({ query }) => ({ 
+        users: [] as User[], 
+        total: 0,
+        page: query.page ?? 1,
+        limit: query.limit ?? 10
+      })
+    )
+  },
   
   // POST /users - 创建用户
-  route('POST', '/users', createHandler(
-    { body: Type.Object({ name: Type.String(), email: Type.String() }) },
-    async ({ body }) => ({ 
-      id: crypto.randomUUID(), 
-      name: body.name, 
-      email: body.email 
-    } as User)
-  )),
+  {
+    method: 'POST',
+    path: '/users',
+    handler: createHandler(
+      { body: Type.Object({ name: Type.String(), email: Type.String() }) },
+      async ({ body }) => ({ 
+        id: crypto.randomUUID(), 
+        name: body.name, 
+        email: body.email 
+      } as User)
+    )
+  },
   
   // GET /users/:id - 获取单个用户
-  route('GET', '/users/:id', createHandler(
-    { params: Type.Object({ id: Type.String() }) },
-    async ({ params }) => ({ 
-      id: params.id, 
-      name: 'User', 
-      email: 'user@example.com' 
-    } as User | null)
-  )),
+  {
+    method: 'GET',
+    path: '/users/:id',
+    handler: createHandler(
+      { params: Type.Object({ id: Type.String() }) },
+      async ({ params }) => ({ 
+        id: params.id, 
+        name: 'User', 
+        email: 'user@example.com' 
+      } as User | null)
+    )
+  },
   
-  // PUT /users/:id - 更新用户（使用快捷方法）
-  put('/users/:id', createHandler(
-    { 
-      params: Type.Object({ id: Type.String() }), 
-      body: Type.Object({ 
-        name: Type.Optional(Type.String()), 
-        email: Type.Optional(Type.String()) 
-      }) 
-    },
-    async ({ params, body }) => ({ 
-      id: params.id, 
-      name: body?.name ?? 'User', 
-      email: body?.email ?? 'user@example.com' 
-    } as User)
-  )),
+  // PUT /users/:id - 更新用户
+  {
+    method: 'PUT',
+    path: '/users/:id',
+    handler: createHandler(
+      { 
+        params: Type.Object({ id: Type.String() }), 
+        body: Type.Object({ 
+          name: Type.Optional(Type.String()), 
+          email: Type.Optional(Type.String()) 
+        }) 
+      },
+      async ({ params, body }) => ({ 
+        id: params.id, 
+        name: body?.name ?? 'User', 
+        email: body?.email ?? 'user@example.com' 
+      } as User)
+    )
+  },
   
-  // DELETE /users/:id - 删除用户（使用快捷方法）
-  del('/users/:id', createHandler(
-    { params: Type.Object({ id: Type.String() }) },
-    async () => ({ success: true, deletedAt: new Date().toISOString() })
-  )),
+  // DELETE /users/:id - 删除用户
+  {
+    method: 'DELETE',
+    path: '/users/:id',
+    handler: createHandler(
+      { params: Type.Object({ id: Type.String() }) },
+      async () => ({ success: true, deletedAt: new Date().toISOString() })
+    )
+  },
 
   // 🌊 GET /chat/stream - SSE 流式响应
-  route('GET', '/chat/stream', createSSEHandler(
-    { query: Type.Object({ prompt: Type.String() }) },
-    async function* ({ query }) {
-      // 模拟 AI 流式响应
-      yield { event: 'start', data: { message: 'Starting...' } }
-      
-      const words = `Hello! You said: "${query.prompt}"`.split(' ')
-      for (const word of words) {
-        yield { data: { text: word + ' ' } as ChatMessage }
-        await new Promise(r => setTimeout(r, 100))
+  {
+    method: 'GET',
+    path: '/chat/stream',
+    handler: createSSEHandler(
+      { query: Type.Object({ prompt: Type.String() }) },
+      async function* ({ query }) {
+        // 模拟 AI 流式响应
+        yield { event: 'start', data: { message: 'Starting...' } }
+        
+        const words = `Hello! You said: "${query.prompt}"`.split(' ')
+        for (const word of words) {
+          yield { data: { text: word + ' ' } as ChatMessage }
+          await new Promise(r => setTimeout(r, 100))
+        }
+        
+        yield { event: 'end', data: { message: 'Done!' } }
       }
-      
-      yield { event: 'end', data: { message: 'Done!' } }
-    }
-  ))
+    )
+  }
 ])
 
 // ============= 🎉 自动推断契约类型！=============

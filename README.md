@@ -5,7 +5,7 @@
 ## ✨ 特性
 
 - 🔒 **完整类型推断** - 从路由定义自动推断 API 类型，无需手动定义接口
-- 🎯 **无需 `as const`** - 使用 `route()` 函数，类型自动保留
+- 🎯 **无需 `as const`** - `defineRoutes()` 自动保留字面量类型
 - 🌊 **SSE 流式响应** - 内置 Server-Sent Events 支持，包含自动重连
 - ⏹️ **请求取消** - 支持 AbortController 取消进行中的请求
 - 🔗 **链式调用** - 优雅的 `api.users({ id }).posts.get()` 语法
@@ -15,8 +15,6 @@
 
 ```bash
 npm install @vafast/api-client
-# 或
-bun add @vafast/api-client
 ```
 
 ## 🚀 快速开始
@@ -25,39 +23,52 @@ bun add @vafast/api-client
 
 ```typescript
 // server.ts
-import { defineRoutes, route, createHandler, createSSEHandler, Type } from 'vafast'
+import { defineRoutes, createHandler, createSSEHandler, Type } from 'vafast'
 
 export const routes = defineRoutes([
-  // ✨ 使用 route() 函数，无需 as const
-  route('GET', '/users', createHandler(
-    { query: Type.Object({ page: Type.Optional(Type.Number()) }) },
-    async ({ query }) => ({ users: [], total: 0, page: query.page ?? 1 })
-  )),
-  
-  route('POST', '/users', createHandler(
-    { body: Type.Object({ name: Type.String(), email: Type.String() }) },
-    async ({ body }) => ({ id: crypto.randomUUID(), ...body })
-  )),
-  
-  route('GET', '/users/:id', createHandler(
-    { params: Type.Object({ id: Type.String() }) },
-    async ({ params }) => ({ id: params.id, name: 'User' })
-  )),
-  
+  // ✨ defineRoutes() 自动保留字面量类型，无需 as const
+  {
+    method: 'GET',
+    path: '/users',
+    handler: createHandler(
+      { query: Type.Object({ page: Type.Optional(Type.Number()) }) },
+      async ({ query }) => ({ users: [], total: 0, page: query.page ?? 1 })
+    )
+  },
+  {
+    method: 'POST',
+    path: '/users',
+    handler: createHandler(
+      { body: Type.Object({ name: Type.String(), email: Type.String() }) },
+      async ({ body }) => ({ id: crypto.randomUUID(), ...body })
+    )
+  },
+  {
+    method: 'GET',
+    path: '/users/:id',
+    handler: createHandler(
+      { params: Type.Object({ id: Type.String() }) },
+      async ({ params }) => ({ id: params.id, name: 'User' })
+    )
+  },
   // 🌊 SSE 流式响应
-  route('GET', '/chat/stream', createSSEHandler(
-    { query: Type.Object({ prompt: Type.String() }) },
-    async function* ({ query }) {
-      yield { event: 'start', data: { message: 'Starting...' } }
-      
-      for (const word of query.prompt.split(' ')) {
-        yield { data: { text: word } }
-        await new Promise(r => setTimeout(r, 100))
+  {
+    method: 'GET',
+    path: '/chat/stream',
+    handler: createSSEHandler(
+      { query: Type.Object({ prompt: Type.String() }) },
+      async function* ({ query }) {
+        yield { event: 'start', data: { message: 'Starting...' } }
+        
+        for (const word of query.prompt.split(' ')) {
+          yield { data: { text: word } }
+          await new Promise(r => setTimeout(r, 100))
+        }
+        
+        yield { event: 'end', data: { message: 'Done!' } }
       }
-      
-      yield { event: 'end', data: { message: 'Done!' } }
-    }
-  ))
+    )
+  }
 ])
 
 // 导出类型供客户端使用
@@ -280,8 +291,6 @@ interface RequestConfig {
 
 ```bash
 npm test
-# 或
-bun test
 ```
 
 ## 📄 许可证
