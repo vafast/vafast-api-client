@@ -17,9 +17,9 @@
     "vafast": "^0.5.1"
   },
   "devDependencies": {
-    "vafast": "^0.5.1",
     "tsdown": "^0.19.0-beta.4",
     "typescript": "^5.5.3",
+    "vafast": "^0.5.6",
     "vitest": "^2.1.8"
   },
   "main": "./dist/index.mjs",
