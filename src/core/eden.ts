@@ -187,15 +187,19 @@ type MergeRoutes<T extends readonly unknown[]> =
       : {}
 
 /**
- * 从 defineRoute 数组自动推断 Eden 契约
+ * 从 defineRoutes 结果自动推断 Eden 契约
+ * 
+ * 支持两种用法：
+ * 1. 直接从 defineRoutes 结果推断（推荐，无需 as const）
+ * 2. 从原始路由定义数组推断（需要 as const）
  * 
  * @example
  * ```typescript
  * import { defineRoute, defineRoutes, Type } from 'vafast'
  * import { eden, InferEden } from '@vafast/api-client'
  * 
- * // 定义路由（使用 as const 保留字面量类型）
- * const routeDefinitions = [
+ * // 方式1：直接从 defineRoutes 结果推断（推荐）
+ * const routes = defineRoutes([
  *   defineRoute({
  *     method: 'GET',
  *     path: '/users',
@@ -208,14 +212,12 @@ type MergeRoutes<T extends readonly unknown[]> =
  *     schema: { body: Type.Object({ name: Type.String() }) },
  *     handler: ({ body }) => ({ id: '1', name: body.name })
  *   })
- * ] as const
+ * ])
  * 
- * // 服务端
- * const routes = defineRoutes(routeDefinitions)
  * const server = new Server(routes)
  * 
- * // 客户端类型推断
- * type Api = InferEden<typeof routeDefinitions>
+ * // ✅ 类型推断自动工作，无需 as const！
+ * type Api = InferEden<typeof routes>
  * const api = eden<Api>('http://localhost:3000')
  * 
  * // 类型安全的调用
@@ -223,7 +225,14 @@ type MergeRoutes<T extends readonly unknown[]> =
  * const { data: user } = await api.users.post({ name: 'John' })  // ✅ body 类型推断
  * ```
  */
-export type InferEden<T extends readonly unknown[]> = MergeRoutes<T>
+export type InferEden<T> = 
+  // 优先从 __source 提取类型（defineRoutes 返回的结果）
+  T extends { __source: infer S extends readonly unknown[] }
+    ? MergeRoutes<S>
+    // 否则直接作为路由数组处理（需要 as const）
+    : T extends readonly unknown[]
+      ? MergeRoutes<T>
+      : {}
 
 // ============= 契约类型（手动定义时使用） =============
 
