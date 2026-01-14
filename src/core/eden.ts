@@ -9,7 +9,7 @@
  * - api.chat.stream.subscribe()  // SSE 流式响应
  */
 
-import type { ApiResponse, RequestConfig } from '../types'
+import type { ApiResponse, ApiError, RequestConfig } from '../types'
 
 // ============= 配置 =============
 
@@ -17,7 +17,7 @@ export interface EdenConfig {
   headers?: Record<string, string>
   onRequest?: (request: Request) => Request | Promise<Request>
   onResponse?: <T>(response: ApiResponse<T>) => ApiResponse<T> | Promise<ApiResponse<T>>
-  onError?: (error: Error) => void
+  onError?: (error: ApiError) => void
   timeout?: number
 }
 
@@ -239,8 +239,8 @@ type RouteNode = {
 interface SSECallbacks<T> {
   /** 收到消息 */
   onMessage: (data: T) => void
-  /** 发生错误 */
-  onError?: (error: Error) => void
+  /** 发生错误（统一使用 ApiError） */
+  onError?: (error: ApiError) => void
   /** 连接打开 */
   onOpen?: () => void
   /** 连接关闭 */
@@ -473,32 +473,41 @@ export function eden<T>(
         responseData = await response.text() as unknown as TReturn
       }
 
-      let result: ApiResponse<TReturn> = {
-        data: responseData,
-        error: response.ok ? null : new Error(`HTTP ${response.status}`),
-        status: response.status,
-        headers: response.headers,
-        response,
+      // Go 风格响应
+      let result: ApiResponse<TReturn>
+      
+      if (response.ok) {
+        // 成功：HTTP 200 + 数据
+        result = { data: responseData, error: null }
+      } else {
+        // 失败：HTTP 4xx/5xx + { code, message }
+        // 优先从响应体提取业务错误码，否则用 HTTP 状态码
+        const errorBody = responseData as { code?: number; message?: string } | null
+        result = {
+          data: null,
+          error: {
+            code: errorBody?.code ?? response.status,
+            message: errorBody?.message ?? `HTTP ${response.status}`
+          }
+        }
       }
 
       if (onResponse) {
         result = await onResponse(result)
       }
 
-      if (!response.ok && onError) {
-        onError(result.error!)
+      if (result.error && onError) {
+        onError(result.error)
       }
 
       return result
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error))
-      if (onError) onError(err)
+      const apiError: ApiError = { code: 0, message: err.message || '网络错误' }
+      if (onError) onError(apiError)
       return {
         data: null,
-        error: err,
-        status: 0,
-        headers: new Headers(),
-        response: new Response(),
+        error: apiError,
       }
     }
   }
@@ -580,7 +589,7 @@ export function eden<T>(
           // 这里不改变配置，仅记录
           
           if (event.event === 'error') {
-            callbacks.onError?.(new Error(String(event.data)))
+            callbacks.onError?.({ code: -1, message: String(event.data) })
           } else {
             callbacks.onMessage(event.data as TData)
           }
@@ -598,7 +607,8 @@ export function eden<T>(
           return
         }
         
-        callbacks.onError?.(error as Error)
+        const err = error instanceof Error ? error : new Error(String(error))
+        callbacks.onError?.({ code: 0, message: err.message || 'SSE 连接错误' })
         
         // 自动重连
         if (reconnectCount < maxReconnects) {

@@ -39,4 +39,5 @@ export type {
   HTTPMethod,
   RequestConfig,
   ApiResponse,
+  ApiError,
 } from './types'

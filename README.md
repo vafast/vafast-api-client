@@ -5,7 +5,7 @@
 ## ✨ 特性
 
 - 🔒 **完整类型推断** - 从路由定义自动推断 API 类型，无需手动定义接口
-- 🎯 **无需 `as const`** - `defineRoutes()` 自动保留字面量类型
+- 🎯 **Go 风格错误处理** - `{ data, error }` 返回，无需 try/catch
 - 🌊 **SSE 流式响应** - 内置 Server-Sent Events 支持，包含自动重连
 - ⏹️ **请求取消** - 支持 AbortController 取消进行中的请求
 - 🔗 **链式调用** - 优雅的 `api.users({ id }).posts.get()` 语法
@@ -91,22 +91,31 @@ const api = eden<Api>('http://localhost:3000', {
   timeout: 5000
 })
 
-// ✅ 完全类型安全的调用
+// ✅ Go 风格：{ data, error } 返回，无需 try/catch
 async function main() {
   // GET /users?page=1
-  const { data: users } = await api.users.get({ page: 1 })
-  console.log(users?.total) // ✅ 类型推断
+  const { data: users, error } = await api.users.get({ page: 1 })
+  if (error) {
+    console.error(`错误码: ${error.code}, 消息: ${error.message}`)
+    return
+  }
+  console.log(users.total) // ✅ 类型安全
 
   // POST /users
-  const { data: newUser } = await api.users.post({ 
+  const { data: newUser, error: postError } = await api.users.post({ 
     name: 'John', 
     email: 'john@example.com' 
   })
-  console.log(newUser?.id) // ✅ 类型推断
+  if (postError) {
+    console.error(postError.message)
+    return
+  }
+  console.log(newUser.id) // ✅ 类型安全
 
   // GET /users/:id
-  const { data: user } = await api.users({ id: '123' }).get()
-  console.log(user?.name) // ✅ 类型推断
+  const { data: user, error: getError } = await api.users({ id: '123' }).get()
+  if (getError) return
+  console.log(user.name) // ✅ 类型安全
 }
 ```
 
@@ -199,6 +208,60 @@ const result = await api.users.get({ page: 1 }, {
 })
 ```
 
+## 🎯 Go 风格错误处理
+
+告别 try/catch，使用 `{ data, error }` 模式处理所有错误。
+
+### 基本用法
+
+```typescript
+const { data, error } = await api.users.get()
+
+if (error) {
+  // 统一处理所有错误
+  console.error(`错误码: ${error.code}, 消息: ${error.message}`)
+  return
+}
+
+// data 此时保证有值
+console.log(data)
+```
+
+### 后端约定
+
+推荐后端使用 HTTP 状态码表示错误类型：
+
+```typescript
+// ✅ 成功
+HTTP 200 + { id: '1', name: 'John' }
+
+// ✅ 业务错误
+HTTP 400 + { code: 10001, message: '用户不存在' }
+
+// ✅ 认证错误
+HTTP 401 + { code: 10002, message: '登录已过期' }
+```
+
+### 与 try/catch 对比
+
+```typescript
+// ❌ 传统方式：需要 try/catch，代码冗长
+try {
+  const response = await fetch('/api/users')
+  if (!response.ok) throw new Error(`HTTP ${response.status}`)
+  const data = await response.json()
+  if (!data.success) throw new Error(data.message)
+  console.log(data)
+} catch (e) {
+  console.error(e.message)
+}
+
+// ✅ Go 风格：简洁优雅
+const { data, error } = await api.users.get()
+if (error) return console.error(error.message)
+console.log(data)
+```
+
 ## 🌊 SSE 流式响应
 
 ### 基本用法
@@ -256,17 +319,27 @@ type MyClient = EdenClient<Api>
 
 ### `ApiResponse<T>`
 
-API 响应类型。
+Go 风格的 API 响应类型。
 
 ```typescript
 interface ApiResponse<T> {
-  data: T | null        // 响应数据
-  error: Error | null   // 错误信息
-  status: number        // HTTP 状态码
-  headers: Headers      // 响应头
-  response: Response    // 原始 Response
+  data: T | null         // 成功时有值，失败时为 null
+  error: ApiError | null // 成功时为 null，失败时有值
+}
+
+interface ApiError {
+  code: number    // 错误码（业务错误码或 HTTP 状态码）
+  message: string // 错误消息
 }
 ```
+
+#### 错误码说明
+
+| 场景 | code | message |
+|------|------|---------|
+| 业务错误 | 后端返回的 code（如 10001） | 后端返回的 message |
+| HTTP 错误 | HTTP 状态码（如 404） | `HTTP 404` |
+| 网络错误 | 0 | 错误描述 |
 
 ### `RequestConfig`
 

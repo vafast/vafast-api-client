@@ -48,7 +48,7 @@ describe('Eden Client', () => {
       expect(req.url).toContain('/users')
       expect(req.url).toContain('page=1')
       expect(req.method).toBe('GET')
-      expect(result.status).toBe(200)
+      expect(result.error).toBeNull()
     })
 
     it('应该发送 POST 请求', async () => {
@@ -176,7 +176,7 @@ describe('Eden Client', () => {
       
       const result = await promise
       expect(result.error).toBeTruthy()
-      expect(result.status).toBe(0)
+      expect(result.error?.code).toBe(0)
     })
 
     it('应该在超时后自动取消请求', async () => {
@@ -202,7 +202,7 @@ describe('Eden Client', () => {
       const result = await api.users.get()
       
       expect(result.error).toBeTruthy()
-      expect(result.status).toBe(0)
+      expect(result.error?.code).toBe(0)
     })
   })
 
@@ -266,7 +266,6 @@ describe('Eden Client', () => {
       const result = await api.users.get()
       
       expect(result.data).toEqual({ users: [{ id: '1' }], total: 10 })
-      expect(result.status).toBe(200)
       expect(result.error).toBeNull()
     })
 
@@ -285,8 +284,9 @@ describe('Eden Client', () => {
     })
 
     it('应该处理 HTTP 错误状态', async () => {
+      // 后端返回 HTTP 401 + { code: 10001, message: '未授权' }
       mockFetch.mockResolvedValue(
-        new Response(JSON.stringify({ message: 'Unauthorized' }), {
+        new Response(JSON.stringify({ code: 10001, message: '未授权' }), {
           status: 401,
           headers: { 'Content-Type': 'application/json' }
         })
@@ -295,9 +295,26 @@ describe('Eden Client', () => {
       const api = eden<TestContract>('http://localhost:3000')
       const result = await api.users.get()
       
-      expect(result.status).toBe(401)
-      expect(result.error).toBeTruthy()
-      expect(result.error?.message).toContain('401')
+      // 应该从响应体提取业务错误码
+      expect(result.error?.code).toBe(10001)
+      expect(result.error?.message).toBe('未授权')
+    })
+
+    it('应该在响应体无错误信息时使用 HTTP 状态码', async () => {
+      // 后端返回 HTTP 404 但响应体为空或无 code/message
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({}), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+
+      const api = eden<TestContract>('http://localhost:3000')
+      const result = await api.users.get()
+      
+      // 回退到 HTTP 状态码
+      expect(result.error?.code).toBe(404)
+      expect(result.error?.message).toBe('HTTP 404')
     })
 
     it('应该处理网络错误', async () => {
@@ -307,8 +324,91 @@ describe('Eden Client', () => {
       const result = await api.users.get()
       
       expect(result.error?.message).toBe('Network error')
-      expect(result.status).toBe(0)
+      expect(result.error?.code).toBe(0)
       expect(result.data).toBeNull()
+    })
+
+    it('应该处理只有 code 没有 message 的错误响应', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ code: 10002 }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+
+      const api = eden<TestContract>('http://localhost:3000')
+      const result = await api.users.get()
+      
+      expect(result.error?.code).toBe(10002)
+      expect(result.error?.message).toBe('HTTP 400')  // 回退到 HTTP 状态
+    })
+
+    it('应该处理只有 message 没有 code 的错误响应', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ message: '参数错误' }), {
+          status: 400,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+
+      const api = eden<TestContract>('http://localhost:3000')
+      const result = await api.users.get()
+      
+      expect(result.error?.code).toBe(400)  // 回退到 HTTP 状态码
+      expect(result.error?.message).toBe('参数错误')
+    })
+  })
+
+  // ============= Go 风格错误处理测试 =============
+
+  describe('Go 风格错误处理', () => {
+    it('onError 回调应该接收 ApiError 格式', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ code: 10001, message: '用户不存在' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+
+      const onError = vi.fn()
+      const api = eden<TestContract>('http://localhost:3000', { onError })
+      
+      await api.users.get()
+      
+      expect(onError).toHaveBeenCalledWith({
+        code: 10001,
+        message: '用户不存在'
+      })
+    })
+
+    it('成功响应应该 data 有值 error 为 null', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ id: '1', name: 'John' }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+
+      const api = eden<TestContract>('http://localhost:3000')
+      const result = await api.users({ id: '1' }).get()
+      
+      expect(result.data).toEqual({ id: '1', name: 'John' })
+      expect(result.error).toBeNull()
+    })
+
+    it('失败响应应该 data 为 null error 有值', async () => {
+      mockFetch.mockResolvedValue(
+        new Response(JSON.stringify({ code: 10001, message: '用户不存在' }), {
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        })
+      )
+
+      const api = eden<TestContract>('http://localhost:3000')
+      const result = await api.users({ id: '999' }).get()
+      
+      expect(result.data).toBeNull()
+      expect(result.error).toEqual({ code: 10001, message: '用户不存在' })
     })
   })
 
