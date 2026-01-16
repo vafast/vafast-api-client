@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, vi, afterEach } from 'vitest'
-import { eden } from '../src'
+import { eden, createClient } from '../src'
 
 // Mock fetch
 const mockFetch = vi.fn()
@@ -39,7 +39,7 @@ describe('Eden Client', () => {
 
   describe('基础请求', () => {
     it('应该发送 GET 请求', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       const result = await api.users.get({ page: 1 })
       
@@ -52,7 +52,7 @@ describe('Eden Client', () => {
     })
 
     it('应该发送 POST 请求', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users.post({ name: 'John' })
       
@@ -62,9 +62,9 @@ describe('Eden Client', () => {
     })
 
     it('应该正确设置请求头', async () => {
-      const api = eden<TestContract>('http://localhost:3000', {
-        headers: { 'Authorization': 'Bearer token123' }
-      })
+      const client = createClient('http://localhost:3000')
+        .headers({ 'Authorization': 'Bearer token123' })
+      const api = eden<TestContract>(client)
       
       await api.users.get()
       
@@ -78,7 +78,7 @@ describe('Eden Client', () => {
 
   describe('参数化路由', () => {
     it('应该通过函数调用处理路径参数', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users({ id: '123' }).get()
       
@@ -88,7 +88,7 @@ describe('Eden Client', () => {
     })
 
     it('应该处理 PUT 请求和路径参数', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users({ id: '123' }).put({ name: 'Jane' })
       
@@ -98,7 +98,7 @@ describe('Eden Client', () => {
     })
 
     it('应该处理 DELETE 请求和路径参数', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users({ id: '456' }).delete()
       
@@ -108,7 +108,7 @@ describe('Eden Client', () => {
     })
 
     it('应该对路径参数进行 URL 编码', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users({ id: 'user/123' }).get()
       
@@ -134,7 +134,7 @@ describe('Eden Client', () => {
     }
 
     it('应该处理嵌套路径', async () => {
-      const api = eden<NestedContract>('http://localhost:3000')
+      const api = eden<NestedContract>(createClient('http://localhost:3000'))
       
       await api.users({ id: '123' }).posts.get()
       
@@ -143,7 +143,7 @@ describe('Eden Client', () => {
     })
 
     it('应该处理多层嵌套路径参数', async () => {
-      const api = eden<NestedContract>('http://localhost:3000')
+      const api = eden<NestedContract>(createClient('http://localhost:3000'))
       
       // 动态参数统一使用 :id
       await api.users({ id: '123' }).posts({ id: '456' }).get()
@@ -169,14 +169,15 @@ describe('Eden Client', () => {
         })
       })
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       const promise = api.users.get(undefined, { signal: controller.signal })
       controller.abort()
       
       const result = await promise
       expect(result.error).toBeTruthy()
-      expect(result.error?.code).toBe(0)
+      // 408 是 HTTP 标准超时状态码
+      expect(result.error?.code).toBe(408)
     })
 
     it('应该在超时后自动取消请求', async () => {
@@ -197,44 +198,52 @@ describe('Eden Client', () => {
         })
       })
 
-      const api = eden<TestContract>('http://localhost:3000', { timeout: 100 })
+      const client = createClient('http://localhost:3000').timeout(100)
+      const api = eden<TestContract>(client)
       
       const result = await api.users.get()
       
       expect(result.error).toBeTruthy()
-      expect(result.error?.code).toBe(0)
+      // 408 是 HTTP 标准超时状态码
+      expect(result.error?.code).toBe(408)
     })
   })
 
-  // ============= 拦截器测试 =============
+  // ============= 中间件测试 =============
 
-  describe('拦截器', () => {
-    it('应该执行 onRequest 拦截器', async () => {
-      const onRequest = vi.fn((req: Request) => {
-        return new Request(req.url, {
-          ...req,
-          headers: { ...Object.fromEntries(req.headers), 'X-Custom': 'value' }
+  describe('中间件', () => {
+    it('应该执行请求中间件', async () => {
+      const onRequest = vi.fn()
+
+      const client = createClient('http://localhost:3000')
+        .use(async (ctx, next) => {
+          onRequest(ctx)
+          return next()
         })
-      })
-
-      const api = eden<TestContract>('http://localhost:3000', { onRequest })
+      const api = eden<TestContract>(client)
       
       await api.users.get()
       
       expect(onRequest).toHaveBeenCalled()
     })
 
-    it('应该执行 onResponse 拦截器', async () => {
-      const onResponse = vi.fn((response) => response)
+    it('应该执行响应中间件', async () => {
+      const onResponse = vi.fn()
 
-      const api = eden<TestContract>('http://localhost:3000', { onResponse })
+      const client = createClient('http://localhost:3000')
+        .use(async (ctx, next) => {
+          const response = await next()
+          onResponse(response)
+          return response
+        })
+      const api = eden<TestContract>(client)
       
       await api.users.get()
       
       expect(onResponse).toHaveBeenCalled()
     })
 
-    it('应该在错误时执行 onError 回调', async () => {
+    it('应该在错误时执行错误处理', async () => {
       mockFetch.mockResolvedValue(
         new Response(JSON.stringify({ error: 'Not found' }), {
           status: 404,
@@ -243,7 +252,15 @@ describe('Eden Client', () => {
       )
 
       const onError = vi.fn()
-      const api = eden<TestContract>('http://localhost:3000', { onError })
+      const client = createClient('http://localhost:3000')
+        .use(async (ctx, next) => {
+          const response = await next()
+          if (response.error) {
+            onError(response.error)
+          }
+          return response
+        })
+      const api = eden<TestContract>(client)
       
       await api.users.get()
       
@@ -262,7 +279,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       expect(result.data).toEqual({ users: [{ id: '1' }], total: 10 })
@@ -277,7 +294,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       expect(result.data).toBe('Hello World')
@@ -292,7 +309,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       // 应该从响应体提取业务错误码
@@ -309,7 +326,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       // 回退到 HTTP 状态码
@@ -320,7 +337,7 @@ describe('Eden Client', () => {
     it('应该处理网络错误', async () => {
       mockFetch.mockRejectedValue(new Error('Network error'))
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       expect(result.error?.message).toBe('Network error')
@@ -336,7 +353,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       expect(result.error?.code).toBe(10002)
@@ -351,7 +368,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users.get()
       
       expect(result.error?.code).toBe(400)  // 回退到 HTTP 状态码
@@ -362,7 +379,7 @@ describe('Eden Client', () => {
   // ============= Go 风格错误处理测试 =============
 
   describe('Go 风格错误处理', () => {
-    it('onError 回调应该接收 ApiError 格式', async () => {
+    it('错误中间件应该接收 ApiError 格式', async () => {
       mockFetch.mockResolvedValue(
         new Response(JSON.stringify({ code: 10001, message: '用户不存在' }), {
           status: 404,
@@ -371,7 +388,15 @@ describe('Eden Client', () => {
       )
 
       const onError = vi.fn()
-      const api = eden<TestContract>('http://localhost:3000', { onError })
+      const client = createClient('http://localhost:3000')
+        .use(async (ctx, next) => {
+          const response = await next()
+          if (response.error) {
+            onError(response.error)
+          }
+          return response
+        })
+      const api = eden<TestContract>(client)
       
       await api.users.get()
       
@@ -389,7 +414,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users({ id: '1' }).get()
       
       expect(result.data).toEqual({ id: '1', name: 'John' })
@@ -404,7 +429,7 @@ describe('Eden Client', () => {
         })
       )
 
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       const result = await api.users({ id: '999' }).get()
       
       expect(result.data).toBeNull()
@@ -416,7 +441,7 @@ describe('Eden Client', () => {
 
   describe('Query 参数', () => {
     it('应该正确构建查询字符串', async () => {
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users.get({ page: 2 })
       
@@ -427,7 +452,7 @@ describe('Eden Client', () => {
 
     it('应该忽略 undefined 和 null 值', async () => {
       // 直接使用 TestContract，测试 users.get
-      const api = eden<TestContract>('http://localhost:3000')
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
       
       await api.users.get({ page: undefined })
       
@@ -469,7 +494,7 @@ describe('SSE 订阅', () => {
       }
     }
 
-    const api = eden<SSEContract>('http://localhost:3000')
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
     const onMessage = vi.fn()
     const onClose = vi.fn()
 
@@ -511,7 +536,7 @@ describe('SSE 订阅', () => {
       }
     }
 
-    const api = eden<SSEContract>('http://localhost:3000')
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
     
     const sub = api.events.subscribe({
       onMessage: () => {}

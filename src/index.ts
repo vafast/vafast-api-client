@@ -1,46 +1,38 @@
 /**
- * Vafast API Client
+ * @vafast/api-client
  * 
- * 类型安全的 Eden 风格 API 客户端
+ * 企业级类型安全 API 客户端
+ * 
+ * 特性：
+ * - 中间件架构：可组合、可扩展
+ * - 类型安全：端到端类型推断
+ * - Go 风格：{ data, error } 响应格式
  * 
  * @example
  * ```typescript
- * import { eden, InferEden } from '@vafast/api-client'
- * import { defineRoute, defineRoutes, Type } from 'vafast'
+ * import { createClient, eden, retryMiddleware } from '@vafast/api-client'
  * 
- * // 定义路由（使用 as const 保留字面量类型）
- * const routeDefinitions = [
- *   defineRoute({
- *     method: 'GET',
- *     path: '/users',
- *     schema: { query: Type.Object({ page: Type.Number() }) },
- *     handler: ({ query }) => ({ users: [], page: query.page })
- *   }),
- *   defineRoute({
- *     method: 'POST',
- *     path: '/users',
- *     schema: { body: Type.Object({ name: Type.String() }) },
- *     handler: ({ body }) => ({ id: '1', name: body.name })
- *   })
- * ] as const
+ * // 创建客户端
+ * const client = createClient('http://localhost:3000')
+ *   .use(authMiddleware)
+ *   .use(retryMiddleware({ count: 2 }))
  * 
- * // 服务端
- * const routes = defineRoutes(routeDefinitions)
- * const server = new Server(routes)
+ * // 类型安全包装
+ * const api = eden<Api>(client)
  * 
- * // 客户端类型推断
- * type Api = InferEden<typeof routeDefinitions>
- * const api = eden<Api>('http://localhost:3000')
- * 
- * // 类型安全的调用
- * const { data } = await api.users.get({ page: 1 })
+ * // 使用
+ * const { data, error } = await api.users.find.post({ page: 1 })
  * ```
  */
 
-// Eden 客户端（核心）
+// ==================== 核心 ====================
+
+// 客户端
+export { createClient, defineMiddleware } from './core/client'
+
+// Eden 类型包装
 export {
   eden,
-  type EdenConfig,
   type EdenClient,
   type InferEden,
   type SSEEvent,
@@ -48,10 +40,31 @@ export {
   type SSESubscription,
 } from './core/eden'
 
-// 类型定义
+// ==================== 中间件 ====================
+
+export {
+  timeoutMiddleware,
+  retryMiddleware,
+  loggerMiddleware,
+  type RetryOptions,
+  type LoggerOptions,
+} from './middlewares'
+
+// ==================== 类型 ====================
+
 export type {
+  // 基础类型
   HTTPMethod,
-  RequestConfig,
-  ApiResponse,
   ApiError,
+  ApiResponse,
+  RequestConfig,
+  // 上下文类型
+  RequestContext,
+  ResponseContext,
+  // 中间件类型
+  Middleware,
+  NamedMiddleware,
+  MiddlewareOptions,
+  // 客户端类型
+  Client,
 } from './types'

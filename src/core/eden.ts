@@ -34,16 +34,6 @@
 
 import type { ApiResponse, ApiError, RequestConfig } from '../types'
 
-// ============= 配置 =============
-
-export interface EdenConfig {
-  headers?: Record<string, string>
-  onRequest?: (request: Request) => Request | Promise<Request>
-  onResponse?: <T>(response: ApiResponse<T>) => ApiResponse<T> | Promise<ApiResponse<T>>
-  onError?: (error: ApiError) => void
-  timeout?: number
-}
-
 // ============= SSE 类型 =============
 
 export interface SSEEvent<T = unknown> {
@@ -352,120 +342,45 @@ async function* parseSSEStream(
   }
 }
 
+// ============= Client 类型导入 ==============
+
+import type { Client } from '../types'
+
 // ============= 实现 =============
 
 /**
  * 创建 Eden 风格的类型安全 API 客户端
+ * 
+ * @param client - Client 实例
+ * 
+ * @example
+ * ```typescript
+ * import { createClient, eden } from '@vafast/api-client'
+ * 
+ * const client = createClient('http://localhost:3000')
+ *   .use(authMiddleware)
+ *   .use(retryMiddleware)
+ * 
+ * const api = eden<Api>(client)
+ * 
+ * const { data, error } = await api.users.find.post({ page: 1 })
+ * ```
  */
-export function eden<T>(
-  baseURL: string,
-  config?: EdenConfig
-): EdenClient<T> {
-  const { headers: defaultHeaders, onRequest, onResponse, onError, timeout } = config ?? {}
+export function eden<T>(client: Client): EdenClient<T> {
+  // 获取 baseURL 用于 SSE
+  const baseURL = client.baseURL
+  
+  // SSE 默认 headers（空对象，用户通过中间件添加）
+  const defaultHeaders: Record<string, string> = {}
 
+  // 请求函数：委托给 client
   async function request<TReturn>(
     method: string,
     path: string,
     data?: unknown,
     requestConfig?: RequestConfig
   ): Promise<ApiResponse<TReturn>> {
-    const url = new URL(path, baseURL)
-    
-    if (method === 'GET' && data && typeof data === 'object') {
-      for (const [key, value] of Object.entries(data as Record<string, unknown>)) {
-        if (value !== undefined && value !== null) {
-          url.searchParams.set(key, String(value))
-        }
-      }
-    }
-
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-      ...defaultHeaders,
-      ...requestConfig?.headers,
-    }
-
-    const controller = new AbortController()
-    let timeoutId: ReturnType<typeof setTimeout> | undefined
-    
-    const userSignal = requestConfig?.signal
-    const requestTimeout = requestConfig?.timeout ?? timeout
-    
-    if (userSignal) {
-      if (userSignal.aborted) {
-        controller.abort()
-      } else {
-        userSignal.addEventListener('abort', () => controller.abort())
-      }
-    }
-    
-    if (requestTimeout) {
-      timeoutId = setTimeout(() => controller.abort(), requestTimeout)
-    }
-
-    const fetchOptions: RequestInit = { 
-      method, 
-      headers,
-      signal: controller.signal 
-    }
-
-    if (method !== 'GET' && method !== 'HEAD' && data) {
-      fetchOptions.body = JSON.stringify(data)
-    }
-
-    let req = new Request(url.toString(), fetchOptions)
-    
-    if (onRequest) {
-      req = await onRequest(req)
-    }
-
-    try {
-      const response = await fetch(req)
-      
-      if (timeoutId) clearTimeout(timeoutId)
-      
-      const contentType = response.headers.get('content-type')
-      let responseData: TReturn | null = null
-      
-      if (contentType?.includes('application/json')) {
-        responseData = await response.json()
-      } else if (contentType?.includes('text/')) {
-        responseData = await response.text() as unknown as TReturn
-      }
-
-      let result: ApiResponse<TReturn>
-      
-      if (response.ok) {
-        result = { data: responseData, error: null }
-      } else {
-        const errorBody = responseData as { code?: number; message?: string } | null
-        result = {
-          data: null,
-          error: {
-            code: errorBody?.code ?? response.status,
-            message: errorBody?.message ?? `HTTP ${response.status}`
-          }
-        }
-      }
-
-      if (onResponse) {
-        result = await onResponse(result)
-      }
-
-      if (result.error && onError) {
-        onError(result.error)
-      }
-
-      return result
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error))
-      const apiError: ApiError = { code: 0, message: err.message || '网络错误' }
-      if (onError) onError(apiError)
-      return {
-        data: null,
-        error: apiError,
-      }
-    }
+    return client.request<TReturn>(method, path, data, requestConfig)
   }
 
   function subscribe<TData>(
