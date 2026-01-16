@@ -1,22 +1,77 @@
 # @vafast/api-client
 
-类型安全的 Eden 风格 API 客户端，支持从 vafast 路由自动推断类型。
+类型安全的 Eden 风格 API 客户端，基于中间件架构，支持从 vafast 路由自动推断类型。
+
+## 特性
+
+- 🎯 **类型安全** - 从 vafast 路由自动推断，或手动定义契约
+- 🧅 **中间件架构** - Koa 风格洋葱模型，灵活组合
+- 🔄 **内置重试** - 支持指数退避、条件重试
+- ⏱️ **超时控制** - 请求级别和全局超时
+- 📡 **SSE 支持** - 流式响应、自动重连
+- 🎨 **Go 风格错误** - `{ data, error }` 统一处理
 
 ## 安装
 
 ```bash
-npm install @vafast/api-client vafast
+npm install @vafast/api-client
 ```
 
 ## 快速开始
 
-### 方式 1：从 vafast 路由自动推断类型（推荐）
+```typescript
+import { createClient, eden } from '@vafast/api-client'
+
+// 1. 创建客户端
+const client = createClient('http://localhost:3000')
+  .headers({ 'Authorization': 'Bearer token' })
+  .timeout(30000)
+
+// 2. 类型包装
+const api = eden<Api>(client)
+
+// 3. 发起请求
+const { data, error } = await api.users.get({ page: 1 })
+
+if (error) {
+  console.error(`错误 ${error.code}: ${error.message}`)
+  return
+}
+
+console.log(data.users)
+```
+
+## 核心 API
+
+### createClient(baseURL)
+
+创建 HTTP 客户端实例，支持链式调用配置中间件。
+
+```typescript
+const client = createClient('http://localhost:3000')
+  .headers({ 'X-App-Id': 'my-app' })     // 默认请求头
+  .timeout(30000)                         // 默认超时
+  .use(authMiddleware)                    // 添加中间件
+  .use(retryMiddleware({ count: 3 }))
+```
+
+### eden<T>(client)
+
+将 Client 实例包装为类型安全的 API 调用。
+
+```typescript
+type Api = InferEden<typeof routes>  // 从 vafast 路由推断
+const api = eden<Api>(client)
+```
+
+## 类型定义
+
+### 方式 1：从 vafast 路由自动推断（推荐）
 
 ```typescript
 // ============= 服务端 =============
 import { defineRoute, defineRoutes, Type, Server } from 'vafast'
 
-// 定义路由（使用 as const 保留字面量类型）
 const routeDefinitions = [
   defineRoute({
     method: 'GET',
@@ -38,28 +93,25 @@ const routeDefinitions = [
   })
 ] as const
 
-// 创建服务器
 const routes = defineRoutes(routeDefinitions)
 const server = new Server(routes)
 
 // ============= 客户端 =============
-import { eden, InferEden } from '@vafast/api-client'
+import { createClient, eden, InferEden } from '@vafast/api-client'
 
-// 自动推断类型
 type Api = InferEden<typeof routeDefinitions>
-const api = eden<Api>('http://localhost:3000')
+
+const client = createClient('http://localhost:3000')
+const api = eden<Api>(client)
 
 // ✅ 完全类型安全
-const { data } = await api.users.get({ page: 1 })  // query 有类型提示
-const { data: user } = await api.users({ id: '123' }).get()  // 动态参数
+const { data } = await api.users.get({ page: 1 })
+const { data: user } = await api.users({ id: '123' }).get()
 ```
 
-### 方式 2：手动定义契约（非 vafast API）
+### 方式 2：手动定义契约
 
 ```typescript
-import { eden } from '@vafast/api-client'
-
-// 手动定义契约类型
 type MyApi = {
   users: {
     get: { query: { page: number }; return: { users: User[]; total: number } }
@@ -72,40 +124,148 @@ type MyApi = {
   }
 }
 
-const api = eden<MyApi>('https://api.example.com')
-
-// 调用方式完全相同
-const { data } = await api.users.get({ page: 1 })
-const { data: user } = await api.users({ id: '123' }).get()
+const api = eden<MyApi>(createClient('https://api.example.com'))
 ```
 
-## 调用方式
+## 中间件
+
+### 内置中间件
 
 ```typescript
-// GET 请求 + query 参数
-const { data, error } = await api.users.get({ page: 1, limit: 10 })
+import { 
+  createClient,
+  retryMiddleware, 
+  timeoutMiddleware, 
+  loggerMiddleware 
+} from '@vafast/api-client'
 
-// POST 请求 + body
-const { data, error } = await api.users.post({ name: 'John', email: 'john@example.com' })
+const client = createClient('http://localhost:3000')
+  // 重试中间件
+  .use(retryMiddleware({
+    count: 3,                    // 最大重试次数
+    delay: 1000,                 // 初始延迟
+    backoff: 2,                  // 退避倍数
+    on: [500, 502, 503, 504],    // 触发重试的状态码
+    shouldRetry: (ctx, res) => true  // 自定义重试条件
+  }))
+  // 超时中间件
+  .use(timeoutMiddleware(5000))
+  // 日志中间件
+  .use(loggerMiddleware({
+    prefix: '[API]',
+    onRequest: (ctx) => console.log('请求:', ctx.method, ctx.url),
+    onResponse: (res) => console.log('响应:', res.status)
+  }))
+```
 
-// 动态路径参数
-const { data, error } = await api.users({ id: '123' }).get()
-const { data, error } = await api.users({ id: '123' }).put({ name: 'Jane' })
-const { data, error } = await api.users({ id: '123' }).delete()
+### 自定义中间件
 
-// 嵌套路径
-const { data, error } = await api.users({ id: '123' }).posts.get()
-const { data, error } = await api.users({ id: '123' }).posts({ id: '456' }).get()
+```typescript
+import { defineMiddleware } from '@vafast/api-client'
+
+// 认证中间件
+const authMiddleware = defineMiddleware('auth', async (ctx, next) => {
+  const token = localStorage.getItem('token')
+  if (token) {
+    ctx.headers.set('Authorization', `Bearer ${token}`)
+  }
+  
+  const response = await next()
+  
+  // Token 过期处理
+  if (response.status === 401) {
+    // 刷新 token 逻辑...
+  }
+  
+  return response
+})
+
+// 动态 header 中间件
+const dynamicHeaderMiddleware = defineMiddleware('dynamic-header', async (ctx, next) => {
+  // 从路由或 store 获取动态值
+  const orgId = getCurrentOrganizationId()
+  const appId = getCurrentAppId()
+  
+  ctx.headers.set('organization-id', orgId)
+  ctx.headers.set('app-id', appId)
+  
+  return next()
+})
+
+const client = createClient('http://localhost:3000')
+  .use(authMiddleware)
+  .use(dynamicHeaderMiddleware)
+```
+
+### 中间件执行顺序
+
+中间件按照洋葱模型执行：
+
+```
+请求 → auth → retry → timeout → [fetch] → timeout → retry → auth → 响应
+```
+
+## 多服务配置
+
+针对不同后端服务创建独立客户端：
+
+```typescript
+// 基础中间件
+const baseMiddlewares = [authMiddleware, loggerMiddleware]
+
+// Auth 服务
+const authClient = createClient(import.meta.env.VITE_AUTH_API_URL)
+  .use(...baseMiddlewares)
+
+// API 服务（需要额外 header）
+const apiClient = createClient(import.meta.env.VITE_API_URL)
+  .use(...baseMiddlewares)
+  .use(dynamicHeaderMiddleware)
+
+// Billing 服务
+const billingClient = createClient(import.meta.env.VITE_BILLING_API_URL)
+  .use(...baseMiddlewares)
+  .use(billingHeaderMiddleware)
+
+// 分别创建 eden 实例
+const authApi = eden<AuthApi>(authClient)
+const api = eden<Api>(apiClient)
+const billingApi = eden<BillingApi>(billingClient)
+```
+
+## 请求级配置
+
+```typescript
+// 单次请求覆盖配置
+const { data, error } = await api.users.get(
+  { page: 1 },
+  {
+    headers: { 'X-Request-Id': 'xxx' },  // 额外 header
+    timeout: 5000,                        // 请求超时
+    signal: controller.signal             // 取消信号
+  }
+)
 ```
 
 ## Go 风格错误处理
+
+所有请求返回 `{ data, error }` 格式：
 
 ```typescript
 const { data, error } = await api.users.get()
 
 if (error) {
   // error: { code: number; message: string }
-  console.error(`错误 ${error.code}: ${error.message}`)
+  switch (error.code) {
+    case 401:
+      redirectToLogin()
+      break
+    case 403:
+      showPermissionDenied()
+      break
+    default:
+      showError(error.message)
+  }
   return
 }
 
@@ -113,56 +273,10 @@ if (error) {
 console.log(data.users)
 ```
 
-## 配置选项
-
-```typescript
-const api = eden<Api>('http://localhost:3000', {
-  // 默认请求头
-  headers: {
-    'Authorization': 'Bearer token123'
-  },
-  
-  // 请求超时（毫秒）
-  timeout: 30000,
-  
-  // 请求拦截器
-  onRequest: async (request) => {
-    // 可以修改请求
-    return request
-  },
-  
-  // 响应拦截器
-  onResponse: async (response) => {
-    // 可以修改响应
-    return response
-  },
-  
-  // 错误回调
-  onError: (error) => {
-    console.error('API Error:', error.code, error.message)
-  }
-})
-```
-
 ## SSE 流式响应
 
 ```typescript
-import { defineRoute, Type } from 'vafast'
-
-// 服务端定义 SSE 路由
-const routeDefinitions = [
-  defineRoute({
-    method: 'GET',
-    path: '/chat/stream',
-    schema: { query: Type.Object({ prompt: Type.String() }) },
-    handler: async function* ({ query }) {
-      yield { data: { text: 'Hello' } }
-      yield { data: { text: 'World' } }
-    }
-  })
-] as const
-
-// 客户端（手动标记 SSE）
+// 定义 SSE 类型
 type Api = {
   chat: {
     stream: {
@@ -175,26 +289,21 @@ type Api = {
   }
 }
 
-const api = eden<Api>('http://localhost:3000')
+const api = eden<Api>(client)
 
 // 订阅 SSE 流
 const subscription = api.chat.stream.subscribe(
   { prompt: 'Hello' },
   {
-    onMessage: (data) => {
-      console.log('收到消息:', data.text)
-    },
-    onError: (error) => {
-      console.error('错误:', error.message)
-    },
+    onMessage: (data) => console.log('收到:', data.text),
+    onError: (error) => console.error('错误:', error),
     onOpen: () => console.log('连接建立'),
     onClose: () => console.log('连接关闭'),
-    onReconnect: (attempt, max) => console.log(`重连中 ${attempt}/${max}`),
-    onMaxReconnects: () => console.log('达到最大重连次数')
+    onReconnect: (attempt, max) => console.log(`重连 ${attempt}/${max}`)
   },
   {
-    reconnectInterval: 3000,  // 重连间隔
-    maxReconnects: 5          // 最大重连次数
+    reconnectInterval: 3000,
+    maxReconnects: 5
   }
 )
 
@@ -213,21 +322,119 @@ const promise = api.users.get({ page: 1 }, { signal: controller.signal })
 controller.abort()
 ```
 
-## API
+---
 
-### `eden<T>(baseURL, config?)`
+## 最佳实践：HTTP 状态码 vs 全部 200
 
-创建 API 客户端实例。
+### ✅ 推荐：使用 HTTP 状态码
 
-- `baseURL` - API 基础 URL
-- `config` - 可选配置
-  - `headers` - 默认请求头
-  - `timeout` - 请求超时（毫秒）
-  - `onRequest` - 请求拦截器
-  - `onResponse` - 响应拦截器
-  - `onError` - 错误回调
+`@vafast/api-client` 设计为使用 HTTP 状态码判断请求成功/失败：
 
-### `InferEden<T>`
+| HTTP 状态码 | 含义 |
+|------------|------|
+| 2xx | 成功 |
+| 400 | 客户端错误（参数错误） |
+| 401 | 未认证（Token 无效/过期） |
+| 403 | 无权限 |
+| 404 | 资源不存在 |
+| 5xx | 服务器错误 |
+
+**后端响应示例：**
+
+```
+HTTP 401 Unauthorized
+
+{
+  "code": 10001,
+  "message": "Token 已过期"
+}
+```
+
+### ❌ 不推荐：全部返回 200 + success 字段
+
+```json
+HTTP 200 OK
+
+{
+  "success": false,
+  "code": 10001,
+  "message": "Token 已过期"
+}
+```
+
+### 为什么 HTTP 状态码更好？
+
+| 方面 | HTTP 状态码 | 全部 200 |
+|------|------------|----------|
+| **监控告警** | 自动识别错误率 | 全是 200，无法识别 |
+| **浏览器调试** | DevTools 红色标记失败 | 全绿，难以调试 |
+| **CDN 缓存** | 不会缓存错误响应 | 可能错误缓存 |
+| **重试策略** | 503 重试，400 不重试 | 无法区分 |
+| **协议语义** | 符合 HTTP 标准 | 违背设计意图 |
+
+### 兼容旧系统
+
+如果后端暂时无法修改，使用中间件做兼容：
+
+```typescript
+const legacyMiddleware = defineMiddleware('legacy', async (ctx, next) => {
+  const response = await next()
+  
+  // 兼容旧的 { success: false } 格式
+  if (response.status === 200 && response.data?.success === false) {
+    response.error = {
+      code: response.data.code ?? 500,
+      message: response.data.message ?? '请求失败'
+    }
+    response.data = null
+  }
+  
+  return response
+})
+
+const client = createClient('http://localhost:3000')
+  .use(legacyMiddleware)
+```
+
+> ⚠️ 这只是过渡方案，建议尽快让后端返回正确的 HTTP 状态码。
+
+---
+
+## API 参考
+
+### createClient(baseURL)
+
+创建 HTTP 客户端。
+
+**返回值（链式）：**
+- `.headers(headers)` - 设置默认请求头
+- `.timeout(ms)` - 设置默认超时
+- `.use(middleware)` - 添加中间件
+- `.request(method, path, data?, config?)` - 发起请求
+
+### eden<T>(client)
+
+创建类型安全的 API 客户端。
+
+### defineMiddleware(name, fn)
+
+创建命名中间件。
+
+```typescript
+const myMiddleware = defineMiddleware('my-middleware', async (ctx, next) => {
+  // 请求前处理
+  console.log('请求:', ctx.method, ctx.url)
+  
+  const response = await next()
+  
+  // 响应后处理
+  console.log('响应:', response.status)
+  
+  return response
+})
+```
+
+### InferEden<T>
 
 从 `defineRoute` 数组推断 Eden 契约类型。
 
