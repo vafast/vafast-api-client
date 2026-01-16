@@ -28,7 +28,7 @@
 // ==================== 核心 ====================
 
 // 客户端
-export { createClient, defineMiddleware } from './core/client'
+export { createClient, defineMiddleware, type ClientConfig } from './core/client'
 
 // Eden 类型包装
 export {

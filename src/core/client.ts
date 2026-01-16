@@ -36,7 +36,7 @@ export function defineMiddleware(
 /**
  * 创建成功响应
  */
-function createSuccessResponse<T>(data: T, ctx: RequestContext, raw: Response): ResponseContext<T> {
+function createSuccessResponse<T>(data: T | null, ctx: RequestContext, raw: Response): ResponseContext<T> {
   return {
     request: ctx,
     raw,
@@ -49,12 +49,12 @@ function createSuccessResponse<T>(data: T, ctx: RequestContext, raw: Response): 
 /**
  * 创建错误响应
  */
-function createErrorResponse(
+function createErrorResponse<T = unknown>(
   code: number,
   message: string,
   ctx: RequestContext,
   raw: Response | null = null
-): ResponseContext {
+): ResponseContext<T> {
   return {
     request: ctx,
     raw,
@@ -225,7 +225,7 @@ class ClientImpl implements Client {
 
       // 错误响应
       const errorData = data as { code?: number; message?: string } | null
-      return createErrorResponse(
+      return createErrorResponse<T>(
         errorData?.code ?? response.status,
         errorData?.message ?? `HTTP ${response.status}`,
         ctx,
@@ -238,33 +238,56 @@ class ClientImpl implements Client {
 
       // 超时错误
       if (error.name === 'AbortError') {
-        return createErrorResponse(408, '请求超时', ctx)
+        return createErrorResponse<T>(408, '请求超时', ctx)
       }
 
       // 网络错误
-      return createErrorResponse(0, error.message || '网络错误', ctx)
+      return createErrorResponse<T>(0, error.message || '网络错误', ctx)
     }
   }
 }
 
 // ==================== 导出 ====================
 
+/** 客户端配置 */
+export interface ClientConfig {
+  baseURL: string
+  timeout?: number
+  headers?: Record<string, string>
+}
+
 /**
  * 创建 HTTP 客户端
  * 
- * @param baseURL 基础 URL
+ * @param config 基础 URL 或配置对象
  * @returns 客户端实例
  * 
  * @example
  * ```typescript
- * const client = createClient('http://localhost:3000')
+ * // 方式1：只传 baseURL
+ * const client = createClient('/api')
  *   .use(authMiddleware)
- *   .use('retry', retryMiddleware)
  *   .timeout(30000)
  * 
- * const api = eden<Api>(client)
+ * // 方式2：传配置对象（推荐）
+ * const client = createClient({
+ *   baseURL: '/api',
+ *   timeout: 30000,
+ *   headers: { 'X-Custom': 'value' }
+ * }).use(authMiddleware)
  * ```
  */
-export function createClient(baseURL: string): Client {
-  return new ClientImpl(baseURL)
+export function createClient(config: string | ClientConfig): Client {
+  if (typeof config === 'string') {
+    return new ClientImpl(config)
+  }
+  
+  const client = new ClientImpl(config.baseURL)
+  if (config.timeout !== undefined) {
+    client.timeout(config.timeout)
+  }
+  if (config.headers) {
+    client.headers(config.headers)
+  }
+  return client
 }
