@@ -5,7 +5,7 @@
  */
 
 import { defineRoute, defineRoutes, Type } from 'vafast'
-import { eden, InferEden } from '../src'
+import { createClient, eden, InferEden } from '../src'
 
 // ============= 服务端：路由定义 =============
 
@@ -88,7 +88,8 @@ const routes = defineRoutes(routeDefinitions)
 type Api = InferEden<typeof routeDefinitions>
 
 // 创建客户端
-const api = eden<Api>('http://localhost:3000')
+const client = createClient('http://localhost:3000')
+const api = eden<Api>(client)
 
 // ============= 类型安全的调用 =============
 

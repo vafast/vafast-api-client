@@ -7,7 +7,7 @@
  * 使用方法：先启动 vafast 服务器，然后运行此测试
  */
 
-import { eden } from '../src'
+import { createClient, eden } from '../src'
 import type { ApiError } from '../src/types'
 
 // 手动定义契约类型（用于演示）
@@ -37,7 +37,8 @@ async function main() {
   console.log('⚠️ 请确保 vafast 服务器已启动在 http://localhost:3456\n')
   
   // 创建客户端
-  const api = eden<TestApi>('http://localhost:3456')
+  const client = createClient('http://localhost:3456')
+  const api = eden<TestApi>(client)
   
   // ============= 测试 1: 请求取消 =============
   console.log('🧪 测试 1: 请求取消')

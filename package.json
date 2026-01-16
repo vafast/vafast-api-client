@@ -17,6 +17,7 @@
     "vafast": "^0.5.1"
   },
   "devDependencies": {
+    "@types/qs": "^6.14.0",
     "tsdown": "^0.19.0-beta.4",
     "typescript": "^5.5.3",
     "vafast": "^0.5.6",
@@ -51,5 +52,8 @@
     "email": "team@vafast.dev"
   },
   "homepage": "https://github.com/vafast/vafast-api-client",
-  "bugs": "https://github.com/vafast/vafast-api-client/issues"
+  "bugs": "https://github.com/vafast/vafast-api-client/issues",
+  "dependencies": {
+    "qs": "^6.14.1"
+  }
 }

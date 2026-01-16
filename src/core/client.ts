@@ -4,6 +4,7 @@
  * 基于中间件模式的可扩展 HTTP 客户端
  */
 
+import qs from 'qs'
 import type {
   ApiError,
   ApiResponse,
@@ -193,12 +194,14 @@ class ClientImpl implements Client {
       fetchOptions.body = JSON.stringify(body)
     }
 
-    // GET 请求的查询参数
+    // GET 请求的查询参数（使用 qs 序列化，与后端 qs.parse 匹配）
     if (method === 'GET' && body && typeof body === 'object') {
-      for (const [key, value] of Object.entries(body as Record<string, unknown>)) {
-        if (value !== undefined && value !== null) {
-          url.searchParams.set(key, String(value))
-        }
+      const queryString = qs.stringify(body as Record<string, unknown>, {
+        skipNulls: true,           // 跳过 null 值
+        arrayFormat: 'indices',    // 数组格式: ids[0]=1&ids[1]=2
+      })
+      if (queryString) {
+        url.search = queryString
       }
     }
 

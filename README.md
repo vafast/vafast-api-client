@@ -43,14 +43,40 @@ console.log(data.users)
 
 ## 核心 API
 
-### createClient(baseURL)
+### createClient(config)
 
-创建 HTTP 客户端实例，支持链式调用配置中间件。
+创建 HTTP 客户端实例，支持两种方式：
 
 ```typescript
+// 方式 1：只传 baseURL（简单场景）
 const client = createClient('http://localhost:3000')
-  .headers({ 'X-App-Id': 'my-app' })     // 默认请求头
-  .timeout(30000)                         // 默认超时
+  .timeout(30000)
+  .use(authMiddleware)
+
+// 方式 2：传配置对象（推荐，配置集中）
+const client = createClient({
+  baseURL: 'http://localhost:3000',
+  timeout: 30000,
+  headers: { 'X-App-Id': 'my-app' }
+}).use(authMiddleware)
+```
+
+**配置对象类型：**
+
+```typescript
+interface ClientConfig {
+  baseURL: string
+  timeout?: number        // 默认 30000ms
+  headers?: Record<string, string>
+}
+```
+
+**链式方法：**
+
+```typescript
+const client = createClient({ baseURL: '/api', timeout: 30000 })
+  .headers({ 'X-App-Id': 'my-app' })     // 追加默认请求头
+  .timeout(60000)                         // 覆盖超时配置
   .use(authMiddleware)                    // 添加中间件
   .use(retryMiddleware({ count: 3 }))
 ```
@@ -210,27 +236,31 @@ const client = createClient('http://localhost:3000')
 针对不同后端服务创建独立客户端：
 
 ```typescript
-// 基础中间件
-const baseMiddlewares = [authMiddleware, loggerMiddleware]
+// 公共配置
+const AUTH_API = { baseURL: '/authRestfulApi', timeout: 30000 }
+const ONES_API = { baseURL: '/restfulApi', timeout: 30000 }
+const BILLING_API = { baseURL: '/billingRestfulApi', timeout: 30000 }
 
 // Auth 服务
-const authClient = createClient(import.meta.env.VITE_AUTH_API_URL)
-  .use(...baseMiddlewares)
+const authClient = createClient(AUTH_API)
 
 // API 服务（需要额外 header）
-const apiClient = createClient(import.meta.env.VITE_API_URL)
-  .use(...baseMiddlewares)
-  .use(dynamicHeaderMiddleware)
+const apiClient = createClient(ONES_API).use(dynamicHeaderMiddleware)
 
 // Billing 服务
-const billingClient = createClient(import.meta.env.VITE_BILLING_API_URL)
-  .use(...baseMiddlewares)
-  .use(billingHeaderMiddleware)
+const billingClient = createClient(BILLING_API).use(billingHeaderMiddleware)
 
-// 分别创建 eden 实例
-const authApi = eden<AuthApi>(authClient)
-const api = eden<Api>(apiClient)
-const billingApi = eden<BillingApi>(billingClient)
+// 使用 CLI 生成的类型安全客户端
+import { createApiClient as createAuthClient } from './types/auth.generated'
+import { createApiClient as createOnesClient } from './types/ones.generated'
+import { createApiClient as createBillingClient } from './types/billing.generated'
+
+export const auth = createAuthClient(authClient)
+export const ones = createOnesClient(apiClient)
+export const billing = createBillingClient(billingClient)
+
+// 使用示例
+const { data, error } = await ones.users.find.post({ current: 1, pageSize: 10 })
 ```
 
 ## 请求级配置
@@ -402,12 +432,24 @@ const client = createClient('http://localhost:3000')
 
 ## API 参考
 
-### createClient(baseURL)
+### createClient(config)
 
 创建 HTTP 客户端。
 
+**参数：**
+- `config: string | ClientConfig` - baseURL 字符串或配置对象
+
+**ClientConfig：**
+```typescript
+interface ClientConfig {
+  baseURL: string
+  timeout?: number        // 默认 30000ms
+  headers?: Record<string, string>
+}
+```
+
 **返回值（链式）：**
-- `.headers(headers)` - 设置默认请求头
+- `.headers(headers)` - 追加默认请求头
 - `.timeout(ms)` - 设置默认超时
 - `.use(middleware)` - 添加中间件
 - `.request(method, path, data?, config?)` - 发起请求

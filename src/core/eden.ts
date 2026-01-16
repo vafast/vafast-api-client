@@ -285,8 +285,26 @@ type Endpoint<T, HasParams extends boolean = false> =
 
 type HTTPMethods = 'get' | 'post' | 'put' | 'patch' | 'delete'
 
+/** 
+ * 判断是否是路由节点（包含 HTTP 方法作为子键）
+ * 路由节点结构：{ post: {...} } 或 { get: {...}, post: {...} }
+ * 方法定义结构：{ body?: ..., return: ... }
+ */
+type HasHTTPMethod<T> = T extends { get: unknown } | { post: unknown } | { put: unknown } | { patch: unknown } | { delete: unknown }
+  ? true
+  : false
+
+/** 
+ * 判断键是否应该被过滤
+ * - 键名是 HTTP 方法 且 值不是路由节点（即是方法定义）→ 过滤
+ * - 键名是动态参数 :xxx → 过滤
+ */
+type ShouldFilter<K, T> = K extends HTTPMethods
+  ? HasHTTPMethod<T> extends true ? false : true  // 是路由节点则保留
+  : K extends `:${string}` ? true : false
+
 export type EdenClient<T, HasParams extends boolean = false> = {
-  [K in keyof T as K extends HTTPMethods | `:${string}` ? never : K]: 
+  [K in keyof T as ShouldFilter<K, T[K]> extends true ? never : K]: 
     T[K] extends { ':id': infer Child }
       ? ((params: Record<string, string>) => EdenClient<Child, true>) & EdenClient<T[K], false>
       : EdenClient<T[K], false>
@@ -523,7 +541,12 @@ export function eden<T>(client: Client): EdenClient<T> {
             callbacksOrOptions?: SSECallbacks<TData> | SSESubscribeOptions,
             options?: SSESubscribeOptions
           ) => {
-            if (typeof queryOrCallbacks === 'object' && 'onMessage' in queryOrCallbacks) {
+            // 判断是否是 callbacks：onMessage 必须是函数
+            const isCallbacks = typeof queryOrCallbacks === 'object' 
+              && 'onMessage' in queryOrCallbacks 
+              && typeof queryOrCallbacks.onMessage === 'function'
+            
+            if (isCallbacks) {
               return subscribe<TData>(
                 basePath, 
                 undefined, 
