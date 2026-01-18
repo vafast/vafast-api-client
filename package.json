@@ -1,6 +1,6 @@
 {
   "name": "@vafast/api-client",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Type-safe API client for Vafast framework",
   "license": "MIT",
   "files": [
