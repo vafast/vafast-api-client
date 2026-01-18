@@ -65,6 +65,24 @@ function createErrorResponse<T = unknown>(
   }
 }
 
+/**
+ * 判断是否为绝对 URL
+ */
+function isAbsoluteURL(url: string): boolean {
+  return url.startsWith('http://') || url.startsWith('https://')
+}
+
+/**
+ * 构建请求 URL（简化版）
+ * - 绝对 URL：直接使用
+ * - 相对路径：直接拼接（保持代理工作）
+ */
+function buildRequestURL(baseURL: string, path: string, queryString: string): string {
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`
+  const fullPath = `${baseURL}${normalizedPath}`
+  return queryString ? `${fullPath}?${queryString}` : fullPath
+}
+
 // ==================== 客户端实现 ====================
 
 /**
@@ -113,8 +131,13 @@ class ClientImpl implements Client {
     body?: unknown,
     config?: RequestConfig
   ): Promise<ApiResponse<T>> {
-    // 构建 URL
-    const url = new URL(path.startsWith('/') ? path : `/${path}`, this.baseURL)
+    const baseURL = this.baseURL
+    const normalizedPath = path.startsWith('/') ? path : `/${path}`
+    
+    // 创建占位 URL 对象（用于中间件上下文）
+    // 注意：实际请求时使用字符串拼接的 URL
+    const dummyURL = new URL('http://placeholder')
+    dummyURL.pathname = normalizedPath
 
     // 构建请求头
     const headers = new Headers({
@@ -130,12 +153,13 @@ class ClientImpl implements Client {
         meta.set(key, value)
       }
     }
-
-    // 构建请求上下文
+    // 存储 baseURL 供 executeFetch 使用
+    meta.set('baseURL', baseURL)
+    
     const ctx: RequestContext = {
       method: method.toUpperCase(),
       path,
-      url,
+      url: dummyURL,
       headers,
       body,
       config,
@@ -170,7 +194,8 @@ class ClientImpl implements Client {
    * 执行实际的 fetch 请求
    */
   private async executeFetch<T>(ctx: RequestContext): Promise<ResponseContext<T>> {
-    const { method, url, headers, body, config } = ctx
+    const { method, headers, body, config, meta } = ctx
+    const baseURL = (meta.get('baseURL') as string) || this.baseURL
 
     // 超时控制
     const controller = new AbortController()
@@ -194,20 +219,21 @@ class ClientImpl implements Client {
       fetchOptions.body = JSON.stringify(body)
     }
 
-    // GET 请求的查询参数（使用 qs 序列化，与后端 qs.parse 匹配）
+    // GET 请求的查询参数
+    let queryString = ''
     if (method === 'GET' && body && typeof body === 'object') {
-      const queryString = qs.stringify(body as Record<string, unknown>, {
-        skipNulls: true,           // 跳过 null 值
-        arrayFormat: 'indices',    // 数组格式: ids[0]=1&ids[1]=2
+      queryString = qs.stringify(body as Record<string, unknown>, {
+        skipNulls: true,
+        arrayFormat: 'indices',
       })
-      if (queryString) {
-        url.search = queryString
-      }
     }
 
     try {
-      // 创建 Request 对象（便于测试和拦截）
-      const request = new Request(url.toString(), fetchOptions)
+      // 构建请求 URL（简化：直接字符串拼接）
+      const requestURL = buildRequestURL(baseURL, ctx.path, queryString)
+      
+      // 创建 Request 对象
+      const request = new Request(requestURL, fetchOptions)
       const response = await fetch(request)
       clearTimeout(timeoutId)
 

@@ -393,8 +393,20 @@ import type { Client } from '../types'
  * ```
  */
 export function eden<T>(client: Client): EdenClient<T> {
-  // 获取 baseURL 用于 SSE
-  const baseURL = client.baseURL
+  // 获取原始 baseURL（用于普通请求）
+  const originalBaseURL = client.baseURL || ''
+  
+  // SSE 需要绝对 URL，延迟构建（只在实际使用 SSE 时才需要）
+  function getSSEBaseURL(): string {
+    if (originalBaseURL.startsWith('http://') || originalBaseURL.startsWith('https://')) {
+      return originalBaseURL
+    }
+    // 相对路径：转换为绝对 URL
+    const origin = typeof window !== 'undefined' && window.location?.origin 
+      ? window.location.origin 
+      : 'http://localhost'
+    return originalBaseURL ? `${origin}${originalBaseURL}` : origin
+  }
   
   // SSE 默认 headers（空对象，用户通过中间件添加）
   const defaultHeaders: Record<string, string> = {}
@@ -415,7 +427,7 @@ export function eden<T>(client: Client): EdenClient<T> {
     callbacks: SSECallbacks<TData>,
     options?: SSESubscribeOptions
   ): SSESubscription<TData> {
-    const url = new URL(path, baseURL)
+    const url = new URL(path, getSSEBaseURL())
     
     if (query) {
       for (const [key, value] of Object.entries(query)) {
