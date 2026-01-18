@@ -296,12 +296,20 @@ type HasHTTPMethod<T> = T extends { get: unknown } | { post: unknown } | { put: 
 
 /** 
  * 判断键是否应该被过滤
- * - 键名是 HTTP 方法 且 值不是路由节点（即是方法定义）→ 过滤
  * - 键名是动态参数 :xxx → 过滤
+ * - 键名是 HTTP 方法 且 值是方法定义（有 body/return 但没有 HTTP 方法子键）→ 过滤
+ * 
+ * 注意：像 prices.delete 这样的路径段（值是 { post: {...} }）不应被过滤
  */
-type ShouldFilter<K, T> = K extends HTTPMethods
-  ? HasHTTPMethod<T> extends true ? false : true  // 是路由节点则保留
-  : K extends `:${string}` ? true : false
+type IsMethodDef<T> = T extends { return: unknown } 
+  ? HasHTTPMethod<T> extends true ? false : true  // 有 return 但没有 HTTP 方法 = 方法定义
+  : false
+
+type ShouldFilter<K, T> = K extends `:${string}` 
+  ? true  // 动态参数始终过滤
+  : K extends HTTPMethods
+    ? IsMethodDef<T>  // HTTP 方法名：只有当值是方法定义时才过滤
+    : false
 
 export type EdenClient<T, HasParams extends boolean = false> = {
   [K in keyof T as ShouldFilter<K, T[K]> extends true ? never : K]: 
