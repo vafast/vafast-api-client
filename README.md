@@ -41,6 +41,26 @@ if (error) {
 console.log(data.users)
 ```
 
+## 路径与 HTTP 方法
+
+链式调用中，**最后一个**决定请求类型：
+
+| 调用方式 | 请求 |
+|---------|------|
+| `api.users.get()` | GET /users |
+| `api.users.post({ name })` | POST /users |
+| `api.users.find.post({ page })` | POST /users/find |
+| `api.videoGeneration.delete.post({ id })` | POST /videoGeneration/delete |
+| `api.users({ id: '123' }).get()` | GET /users/123 |
+| `api.chat.stream.sse(callbacks)` | SSE /chat/stream |
+
+**规则**：
+- `get`, `post`, `put`, `patch`, `delete` → HTTP 方法
+- `sse` → SSE 订阅
+- 其他 → 路径段
+
+这样即使路径名是 `delete`、`get` 等，也不会与 HTTP 方法冲突。
+
 ## 核心 API
 
 ### createClient(config)
@@ -306,24 +326,10 @@ console.log(data.users)
 ## SSE 流式响应
 
 ```typescript
-// 定义 SSE 类型
-type Api = {
-  chat: {
-    stream: {
-      get: {
-        query: { prompt: string }
-        return: { text: string }
-        sse: { readonly __brand: 'SSE' }
-      }
-    }
-  }
-}
-
 const api = eden<Api>(client)
 
 // 订阅 SSE 流
-const subscription = api.chat.stream.subscribe(
-  { prompt: 'Hello' },
+const subscription = api.chat.stream.sse(
   {
     onMessage: (data) => console.log('收到:', data.text),
     onError: (error) => console.error('错误:', error),

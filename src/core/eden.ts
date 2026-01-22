@@ -537,68 +537,80 @@ export function eden<T>(client: Client): EdenClient<T> {
     }
   }
 
-  function createEndpoint(basePath: string): unknown {
-    const methods = ['get', 'post', 'put', 'patch', 'delete']
-    
-    const handler = (params: Record<string, string>) => {
-      const paramValue = Object.values(params)[0]
-      const newPath = `${basePath}/${encodeURIComponent(paramValue)}`
-      return createEndpoint(newPath)
-    }
+  /**
+   * 新方案：segments 数组 + 最后一个判断 HTTP 方法
+   * 
+   * api.users.find.post()             → POST /users/find
+   * api.users.get()                    → GET /users
+   * api.videoGeneration.delete.post()  → POST /videoGeneration/delete
+   * api.chat.stream.sse(callbacks)     → SSE /chat/stream
+   * api.users({ id: '123' }).get()     → GET /users/123
+   */
+  function createEndpoint(segments: string[]): unknown {
+    const httpMethods = ['get', 'post', 'put', 'patch', 'delete']
 
-    return new Proxy(handler as unknown as object, {
+    return new Proxy(() => {}, {
       get(_, prop: string) {
-        if (methods.includes(prop)) {
-          const httpMethod = prop.toUpperCase()
-          return (data?: unknown, cfg?: RequestConfig) => {
-            return request(httpMethod, basePath, data, cfg)
-          }
-        }
-        
-        if (prop === 'subscribe') {
-          return <TData>(
-            queryOrCallbacks: Record<string, unknown> | SSECallbacks<TData>,
-            callbacksOrOptions?: SSECallbacks<TData> | SSESubscribeOptions,
-            options?: SSESubscribeOptions
-          ) => {
-            // 判断是否是 callbacks：onMessage 必须是函数
-            const isCallbacks = typeof queryOrCallbacks === 'object' 
-              && 'onMessage' in queryOrCallbacks 
-              && typeof queryOrCallbacks.onMessage === 'function'
-            
-            if (isCallbacks) {
-              return subscribe<TData>(
-                basePath, 
-                undefined, 
-                queryOrCallbacks as SSECallbacks<TData>,
-                callbacksOrOptions as SSESubscribeOptions
-              )
-            } else {
-              return subscribe<TData>(
-                basePath,
-                queryOrCallbacks as Record<string, unknown>,
-                callbacksOrOptions as SSECallbacks<TData>,
-                options
-              )
-            }
-          }
-        }
-        
-        const childPath = `${basePath}/${prop}`
-        return createEndpoint(childPath)
+        // 所有属性访问都添加到 segments
+        return createEndpoint([...segments, prop])
       },
       apply(_, __, args) {
-        const params = args[0] as Record<string, string>
-        const paramValue = Object.values(params)[0]
-        const newPath = `${basePath}/${encodeURIComponent(paramValue)}`
-        return createEndpoint(newPath)
+        const [firstArg] = args
+
+        // 动态参数：api.users({ id: '123' }) → 继续构建路径
+        if (
+          firstArg
+          && typeof firstArg === 'object'
+          && !Array.isArray(firstArg)
+          && Object.keys(firstArg).length === 1
+          && !('onMessage' in firstArg) // 排除 SSE callbacks
+        ) {
+          const paramValue = Object.values(firstArg)[0]
+          return createEndpoint([...segments, encodeURIComponent(String(paramValue))])
+        }
+
+        const last = segments[segments.length - 1]
+        const pathSegments = segments.slice(0, -1)
+        const path = '/' + pathSegments.join('/')
+
+        // SSE 订阅
+        if (last === 'sse') {
+          const [callbacksOrQuery, optionsOrCallbacks, options] = args as [
+            Record<string, unknown> | SSECallbacks<unknown>,
+            SSECallbacks<unknown> | SSESubscribeOptions | undefined,
+            SSESubscribeOptions | undefined
+          ]
+          
+          // 判断第一个参数是 callbacks 还是 query
+          const isCallbacks = typeof callbacksOrQuery === 'object'
+            && 'onMessage' in callbacksOrQuery
+            && typeof callbacksOrQuery.onMessage === 'function'
+
+          if (isCallbacks) {
+            return subscribe(path, undefined, callbacksOrQuery as SSECallbacks<unknown>, optionsOrCallbacks as SSESubscribeOptions)
+          } else {
+            return subscribe(path, callbacksOrQuery as Record<string, unknown>, optionsOrCallbacks as SSECallbacks<unknown>, options)
+          }
+        }
+
+        // HTTP 方法
+        if (httpMethods.includes(last)) {
+          const method = last.toUpperCase()
+          const [data, config] = args as [unknown?, RequestConfig?]
+          return request(method, path, data, config)
+        }
+
+        // 默认 POST（路径末尾不是方法名）
+        const fullPath = '/' + segments.join('/')
+        const [data, config] = args as [unknown?, RequestConfig?]
+        return request('POST', fullPath, data, config)
       }
     })
   }
 
   return new Proxy({} as EdenClient<T>, {
     get(_, prop: string) {
-      return createEndpoint(`/${prop}`)
+      return createEndpoint([prop])
     }
   })
 }
