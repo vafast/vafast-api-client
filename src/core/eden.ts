@@ -226,12 +226,18 @@ export type InferEden<T> =
 
 // ============= 契约类型（手动定义时使用） =============
 
+/** HTTP 方法定义 */
 interface MethodDef {
   query?: unknown
   body?: unknown
   params?: unknown
   return: unknown
-  sse?: SSEBrand
+}
+
+/** SSE 方法定义（独立于 HTTP 方法） */
+interface SSEMethodDef {
+  query?: unknown
+  return: unknown
 }
 
 type RouteNode = {
@@ -240,8 +246,11 @@ type RouteNode = {
   put?: MethodDef
   patch?: MethodDef
   delete?: MethodDef
+  head?: MethodDef
+  options?: MethodDef
+  sse?: SSEMethodDef  // SSE 作为一等公民方法
   ':id'?: RouteNode
-  [key: string]: MethodDef | RouteNode | undefined
+  [key: string]: MethodDef | SSEMethodDef | RouteNode | undefined
 }
 
 // ============= 客户端类型 =============
@@ -255,12 +264,9 @@ interface SSECallbacks<T> {
   onMaxReconnects?: () => void
 }
 
-type MethodCall<M extends MethodDef, HasParams extends boolean = false> =
-  M extends { sse: SSEBrand }
-  ? M extends { query: infer Q }
-  ? (query: Q, callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
-  : (callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
-  : HasParams extends true
+/** HTTP 方法调用签名 */
+type HTTPMethodCall<M extends MethodDef, HasParams extends boolean = false> =
+  HasParams extends true
   ? M extends { body: infer B }
   ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
   : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
@@ -270,20 +276,25 @@ type MethodCall<M extends MethodDef, HasParams extends boolean = false> =
   ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
   : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
 
-type IsSSEEndpoint<M> = M extends { sse: { readonly __brand: 'SSE' } } ? true : false
+/** SSE 方法调用签名 */
+type SSEMethodCall<M extends SSEMethodDef> =
+  M extends { query: infer Q }
+  ? (query: Q, callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
+  : (callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
 
+/** 端点类型：HTTP 方法 + SSE 方法 */
 type Endpoint<T, HasParams extends boolean = false> =
+  // HTTP 方法
   {
-    [K in 'get' | 'post' | 'put' | 'patch' | 'delete' as T extends { [P in K]: MethodDef } ? K : never]:
-    T extends { [P in K]: infer M extends MethodDef } ? MethodCall<M, HasParams> : never
+    [K in 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' as T extends { [P in K]: MethodDef } ? K : never]:
+    T extends { [P in K]: infer M extends MethodDef } ? HTTPMethodCall<M, HasParams> : never
   }
-  & (T extends { get: infer M extends MethodDef }
-    ? IsSSEEndpoint<M> extends true
-    ? { subscribe: MethodCall<M, HasParams> }
-    : {}
+  // SSE 方法（作为一等公民）
+  & (T extends { sse: infer M extends SSEMethodDef }
+    ? { sse: SSEMethodCall<M> }
     : {})
 
-type HTTPMethods = 'get' | 'post' | 'put' | 'patch' | 'delete'
+type HTTPMethods = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'sse'
 
 /** 
  * 判断是否是路由节点（包含 HTTP 方法作为子键）
@@ -547,7 +558,7 @@ export function eden<T>(client: Client): EdenClient<T> {
    * api.users({ id: '123' }).get()     → GET /users/123
    */
   function createEndpoint(segments: string[]): unknown {
-    const httpMethods = ['get', 'post', 'put', 'patch', 'delete']
+    const httpMethods = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     return new Proxy(() => { }, {
       get(_, prop: string) {

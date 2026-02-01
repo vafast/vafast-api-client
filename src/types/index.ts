@@ -51,6 +51,8 @@ export interface RequestConfig {
   signal?: AbortSignal
   /** 元数据（传递给中间件） */
   meta?: Record<string, unknown>
+  /** 查询参数（POST/PUT/PATCH 请求也可携带 query） */
+  query?: Record<string, unknown>
 }
 
 // ==================== 上下文类型 ====================

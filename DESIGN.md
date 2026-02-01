@@ -369,7 +369,7 @@ const { data, error } = await api.admin.apps.find.post(
 ### 保留
 
 - `eden.ts` 中的类型推断逻辑（InferEden、EdenClient 等）
-- SSE 支持（subscribe）
+- SSE 支持（`sse` 作为一等公民方法）
 
 ### 新增
 

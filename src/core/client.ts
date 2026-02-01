@@ -140,8 +140,10 @@ class ClientImpl implements Client {
     dummyURL.pathname = normalizedPath
 
     // 构建请求头
+    // 注意：GET/HEAD 请求不应设置 Content-Type（因为没有 body）
+    const hasBody = body && method.toUpperCase() !== 'GET' && method.toUpperCase() !== 'HEAD'
     const headers = new Headers({
-      'Content-Type': 'application/json',
+      ...(hasBody ? { 'Content-Type': 'application/json' } : {}),
       ...this.defaultHeaders,
       ...config?.headers,
     })
@@ -214,15 +216,26 @@ class ClientImpl implements Client {
       signal: controller.signal,
     }
 
-    // 添加请求体（GET/HEAD 不需要）
-    if (body && method !== 'GET' && method !== 'HEAD') {
+    // 添加请求体（GET/HEAD/OPTIONS 不需要）
+    if (body && method !== 'GET' && method !== 'HEAD' && method !== 'OPTIONS') {
       fetchOptions.body = JSON.stringify(body)
     }
 
-    // GET 请求的查询参数
+    // 构建查询参数
+    // 1. GET 请求：body 参数转为 query string
+    // 2. 其他请求：从 config.query 获取 query 参数
     let queryString = ''
-    if (method === 'GET' && body && typeof body === 'object') {
-      queryString = qs.stringify(body as Record<string, unknown>, {
+    if (method === 'GET' || method === 'HEAD') {
+      // GET/HEAD 请求：body 作为 query 参数
+      if (body && typeof body === 'object') {
+        queryString = qs.stringify(body as Record<string, unknown>, {
+          skipNulls: true,
+          arrayFormat: 'indices',
+        })
+      }
+    } else if (config?.query && typeof config.query === 'object') {
+      // POST/PUT/PATCH/DELETE/OPTIONS 请求：从 config.query 获取
+      queryString = qs.stringify(config.query, {
         skipNulls: true,
         arrayFormat: 'indices',
       })

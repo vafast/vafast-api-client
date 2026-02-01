@@ -168,6 +168,12 @@ type MyApi = {
       delete: { return: { success: boolean } }
     }
   }
+  // SSE 方法：作为一等公民
+  chat: {
+    stream: {
+      sse: { query: { prompt: string }; return: { text: string } }
+    }
+  }
 }
 
 const api = eden<MyApi>(createClient('https://api.example.com'))
@@ -325,11 +331,32 @@ console.log(data.users)
 
 ## SSE 流式响应
 
+`sse` 是一等公民方法，与 `get`/`post` 等 HTTP 方法平级：
+
+### 契约定义
+
+```typescript
+// sse 作为独立方法定义（简洁直观）
+type Api = {
+  chat: {
+    stream: {
+      sse: { query: { prompt: string }; return: { text: string } }
+    }
+  }
+  events: {
+    sse: { return: { type: string; data: unknown } }  // 无 query 参数
+  }
+}
+```
+
+### 使用方式
+
 ```typescript
 const api = eden<Api>(client)
 
-// 订阅 SSE 流
+// 有 query 参数
 const subscription = api.chat.stream.sse(
+  { prompt: '你好' },  // query 参数
   {
     onMessage: (data) => console.log('收到:', data.text),
     onError: (error) => console.error('错误:', error),
@@ -342,6 +369,11 @@ const subscription = api.chat.stream.sse(
     maxReconnects: 5
   }
 )
+
+// 无 query 参数
+const eventSub = api.events.sse({
+  onMessage: (data) => console.log('事件:', data.type)
+})
 
 // 取消订阅
 subscription.unsubscribe()

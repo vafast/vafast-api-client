@@ -30,7 +30,8 @@ describe('Eden Client', () => {
     }
     chat: {
       stream: {
-        get: { query: { prompt: string }; return: unknown; sse: true }
+        // 新的 SSE 定义：sse 作为一等公民方法
+        sse: { query: { prompt: string }; return: string }
       }
     }
   }
@@ -70,7 +71,8 @@ describe('Eden Client', () => {
 
       const req = mockFetch.mock.calls[0][0] as Request
       expect(req.headers.get('Authorization')).toBe('Bearer token123')
-      expect(req.headers.get('Content-Type')).toBe('application/json')
+      // GET 请求不应设置 Content-Type（因为没有 body）
+      expect(req.headers.get('Content-Type')).toBeNull()
     })
   })
 
@@ -462,6 +464,209 @@ describe('Eden Client', () => {
       expect(url.searchParams.has('page')).toBe(false)
     })
   })
+
+  // ============= HEAD 和 OPTIONS 方法测试 =============
+
+  describe('HEAD 和 OPTIONS 方法', () => {
+    interface ExtendedContract {
+      users: {
+        head: { return: void }
+        options: { return: { allow: string[] } }
+        ':id': {
+          head: { return: void }
+        }
+      }
+    }
+
+    it('应该发送 HEAD 请求', async () => {
+      const api = eden<ExtendedContract>(createClient('http://localhost:3000'))
+
+      await api.users.head()
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.method).toBe('HEAD')
+      expect(req.url).toContain('/users')
+    })
+
+    it('应该发送 OPTIONS 请求', async () => {
+      const api = eden<ExtendedContract>(createClient('http://localhost:3000'))
+
+      await api.users.options()
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.method).toBe('OPTIONS')
+      expect(req.url).toContain('/users')
+    })
+
+    it('HEAD 请求应该支持路径参数', async () => {
+      const api = eden<ExtendedContract>(createClient('http://localhost:3000'))
+
+      await api.users({ id: '123' }).head()
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.method).toBe('HEAD')
+      expect(req.url).toBe('http://localhost:3000/users/123')
+    })
+  })
+
+  // ============= POST + Query 参数测试 =============
+
+  describe('POST + Query 参数', () => {
+    it('应该支持 POST 请求同时携带 body 和 query', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users.post(
+        { name: 'John' },
+        { query: { notify: 'true', source: 'web' } }
+      )
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.method).toBe('POST')
+
+      // 验证 URL 包含 query 参数
+      const url = new URL(req.url)
+      expect(url.searchParams.get('notify')).toBe('true')
+      expect(url.searchParams.get('source')).toBe('web')
+
+      // 验证 body 内容
+      const body = await req.text()
+      expect(JSON.parse(body)).toEqual({ name: 'John' })
+    })
+
+    it('应该支持 PUT 请求同时携带 body 和 query', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users({ id: '123' }).put(
+        { name: 'Jane' },
+        { query: { version: '2' } }
+      )
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.method).toBe('PUT')
+      expect(req.url).toContain('/users/123')
+
+      const url = new URL(req.url)
+      expect(url.searchParams.get('version')).toBe('2')
+    })
+
+    it('POST 请求没有 query 配置时不应该有查询字符串', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users.post({ name: 'John' })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      const url = new URL(req.url)
+      expect(url.search).toBe('')
+    })
+  })
+
+  // ============= Content-Type 测试 =============
+
+  describe('Content-Type 处理', () => {
+    it('GET 请求不应该设置 Content-Type', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users.get({ page: 1 })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.headers.get('Content-Type')).toBeNull()
+    })
+
+    it('HEAD 请求不应该设置 Content-Type', async () => {
+      interface HeadContract {
+        users: {
+          head: { return: void }
+        }
+      }
+      const api = eden<HeadContract>(createClient('http://localhost:3000'))
+
+      await api.users.head()
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.headers.get('Content-Type')).toBeNull()
+    })
+
+    it('POST 请求应该设置 Content-Type: application/json', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users.post({ name: 'John' })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.headers.get('Content-Type')).toBe('application/json')
+    })
+
+    it('PUT 请求应该设置 Content-Type: application/json', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users({ id: '123' }).put({ name: 'Jane' })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      expect(req.headers.get('Content-Type')).toBe('application/json')
+    })
+
+    it('DELETE 请求不带 body 时不应该设置 Content-Type', async () => {
+      const api = eden<TestContract>(createClient('http://localhost:3000'))
+
+      await api.users({ id: '123' }).delete()
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      // DELETE 不带 body 时不设置 Content-Type
+      expect(req.headers.get('Content-Type')).toBeNull()
+    })
+  })
+
+  // ============= 数组和嵌套对象 Query 参数测试 =============
+
+  describe('复杂 Query 参数', () => {
+    interface ComplexQueryContract {
+      search: {
+        get: {
+          query: {
+            tags?: string[]
+            filter?: { status?: string; type?: string }
+            ids?: number[]
+          }
+          return: unknown[]
+        }
+      }
+    }
+
+    it('应该正确序列化数组参数', async () => {
+      const api = eden<ComplexQueryContract>(createClient('http://localhost:3000'))
+
+      await api.search.get({ tags: ['a', 'b', 'c'] })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      const url = new URL(req.url)
+      // qs 使用 indices 格式：tags[0]=a&tags[1]=b&tags[2]=c
+      expect(url.searchParams.get('tags[0]')).toBe('a')
+      expect(url.searchParams.get('tags[1]')).toBe('b')
+      expect(url.searchParams.get('tags[2]')).toBe('c')
+    })
+
+    it('应该正确序列化嵌套对象参数', async () => {
+      const api = eden<ComplexQueryContract>(createClient('http://localhost:3000'))
+
+      await api.search.get({ filter: { status: 'active', type: 'user' } })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      const url = new URL(req.url)
+      expect(url.searchParams.get('filter[status]')).toBe('active')
+      expect(url.searchParams.get('filter[type]')).toBe('user')
+    })
+
+    it('应该正确序列化数字数组参数', async () => {
+      const api = eden<ComplexQueryContract>(createClient('http://localhost:3000'))
+
+      await api.search.get({ ids: [1, 2, 3] })
+
+      const req = mockFetch.mock.calls[0][0] as Request
+      const url = new URL(req.url)
+      expect(url.searchParams.get('ids[0]')).toBe('1')
+      expect(url.searchParams.get('ids[1]')).toBe('2')
+      expect(url.searchParams.get('ids[2]')).toBe('3')
+    })
+  })
 })
 
 // ============= SSE 测试 =============
@@ -488,9 +693,10 @@ describe('SSE 订阅', () => {
       })
     )
 
+    // 新的简洁 SSE 定义：sse 作为一等公民方法
     interface SSEContract {
       events: {
-        sse: { query: { channel: string }; return: unknown }
+        sse: { query: { channel: string }; return: { message: string } }
       }
     }
 
@@ -530,6 +736,7 @@ describe('SSE 订阅', () => {
       })
     )
 
+    // SSE 无 query 参数的简洁定义
     interface SSEContract {
       events: {
         sse: { return: unknown }
@@ -540,7 +747,7 @@ describe('SSE 订阅', () => {
 
     const sub = api.events.sse({
       onMessage: () => { }
-    }) as { connected: boolean; unsubscribe: () => void }
+    })
 
     expect(sub.connected).toBe(false) // 还在连接中
 
