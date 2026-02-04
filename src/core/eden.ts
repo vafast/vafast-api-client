@@ -60,9 +60,6 @@ export interface SSESubscription<T = unknown> {
 /** 从 TypeBox Schema 提取静态类型 */
 type InferStatic<T> = T extends { static: infer S } ? S : T
 
-/** 检查是否是 SSE Handler */
-type IsSSEHandler<T> = T extends { __sse: { readonly __brand: 'SSE' } } ? true : false
-
 /** 从 Schema 对象提取各部分类型 */
 type GetSchemaQuery<S> = S extends { query: infer Q } ? InferStatic<Q> : undefined
 type GetSchemaBody<S> = S extends { body: infer B } ? InferStatic<B> : undefined
