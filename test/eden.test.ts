@@ -161,9 +161,18 @@ describe('Eden Client', () => {
     it('应该支持通过 AbortController 取消请求', async () => {
       const controller = new AbortController()
 
-      mockFetch.mockImplementation(() => {
+      mockFetch.mockImplementation((input: Request | string) => {
+        const signal = input instanceof Request ? input.signal : undefined
         return new Promise((_, reject) => {
-          controller.signal.addEventListener('abort', () => {
+          // 检查是否已经 aborted
+          if (signal?.aborted) {
+            const error = new Error('This operation was aborted')
+            error.name = 'AbortError'
+            reject(error)
+            return
+          }
+          // 添加 abort 监听器
+          signal?.addEventListener('abort', () => {
             const error = new Error('This operation was aborted')
             error.name = 'AbortError'
             reject(error)
@@ -178,8 +187,9 @@ describe('Eden Client', () => {
 
       const result = await promise
       expect(result.error).toBeTruthy()
-      // 408 是 HTTP 标准超时状态码
-      expect(result.error?.code).toBe(408)
+      // 主动取消返回 code: 0, type: 'abort'
+      expect(result.error?.code).toBe(0)
+      expect(result.error?.type).toBe('abort')
     })
 
     it('应该在超时后自动取消请求', async () => {
@@ -404,7 +414,8 @@ describe('Eden Client', () => {
 
       expect(onError).toHaveBeenCalledWith({
         code: 10001,
-        message: '用户不存在'
+        message: '用户不存在',
+        type: 'server'
       })
     })
 
@@ -435,7 +446,7 @@ describe('Eden Client', () => {
       const result = await api.users({ id: '999' }).get()
 
       expect(result.data).toBeNull()
-      expect(result.error).toEqual({ code: 10001, message: '用户不存在' })
+      expect(result.error).toEqual({ code: 10001, message: '用户不存在', type: 'server' })
     })
   })
 
@@ -693,10 +704,10 @@ describe('SSE 订阅', () => {
       })
     )
 
-    // 新的简洁 SSE 定义：sse 作为一等公民方法
+    // 链式调用：.get().sse()
     interface SSEContract {
       events: {
-        sse: { query: { channel: string }; return: { message: string } }
+        get: { query: { channel: string }; return: { message: string } }
       }
     }
 
@@ -705,16 +716,13 @@ describe('SSE 订阅', () => {
     const onClose = vi.fn()
 
     await new Promise<void>((resolve) => {
-      api.events.sse(
-        { channel: 'test' },
-        {
-          onMessage,
-          onClose: () => {
-            onClose()
-            resolve()
-          }
+      api.events.get({ channel: 'test' }).sse({
+        onMessage,
+        onClose: () => {
+          onClose()
+          resolve()
         }
-      )
+      })
     })
 
     expect(mockFetch).toHaveBeenCalled()
@@ -736,16 +744,16 @@ describe('SSE 订阅', () => {
       })
     )
 
-    // SSE 无 query 参数的简洁定义
+    // 链式调用：.get().sse()（无参数）
     interface SSEContract {
       events: {
-        sse: { return: unknown }
+        get: { return: unknown }
       }
     }
 
     const api = eden<SSEContract>(createClient('http://localhost:3000'))
 
-    const sub = api.events.sse({
+    const sub = api.events.get().sse({
       onMessage: () => { }
     })
 
@@ -753,5 +761,687 @@ describe('SSE 订阅', () => {
 
     sub.unsubscribe()
     expect(sub.connected).toBe(false)
+  })
+
+  it('应该支持 POST SSE (带 body)', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"content":"Hello!"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.post().sse()
+    interface SSEContract {
+      chat: {
+        stream: {
+          post: {
+            body: { messages: Array<{ role: string; content: string }> }
+            return: { content: string }
+          }
+        }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+    const onMessage = vi.fn()
+    const onClose = vi.fn()
+
+    await new Promise<void>((resolve) => {
+      api.chat.stream.post({ messages: [{ role: 'user', content: '你好' }] }).sse({
+        onMessage,
+        onClose: () => {
+          onClose()
+          resolve()
+        }
+      })
+    })
+
+    // 验证使用了 POST 方法和 body（fetch 收到 Request 对象）
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.method).toBe('POST')
+    expect(await req.text()).toBe(JSON.stringify({ messages: [{ role: 'user', content: '你好' }] }))
+    expect(req.headers.get('Content-Type')).toBe('application/json')
+    expect(req.headers.get('Accept')).toBe('text/event-stream')
+    expect(onMessage).toHaveBeenCalledWith({ content: 'Hello!' })
+  })
+
+  it('应该支持 DELETE SSE (批量删除进度)', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"deleted":1,"total":3}\n\n'))
+        controller.enqueue(encoder.encode('data: {"deleted":2,"total":3}\n\n'))
+        controller.enqueue(encoder.encode('data: {"deleted":3,"total":3}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.delete().sse()
+    interface SSEContract {
+      batch: {
+        delete: {
+          body: { ids: string[] }
+          return: { deleted: number; total: number }
+        }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+    const messages: Array<{ deleted: number; total: number }> = []
+
+    await new Promise<void>((resolve) => {
+      api.batch.delete({ ids: ['1', '2', '3'] }).sse({
+        onMessage: (data) => messages.push(data),
+        onClose: resolve
+      })
+    })
+
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.method).toBe('DELETE')
+    expect(await req.text()).toBe(JSON.stringify({ ids: ['1', '2', '3'] }))
+    expect(messages).toHaveLength(3)
+    expect(messages[2]).toEqual({ deleted: 3, total: 3 })
+  })
+
+  it('应该支持 POST SSE 带额外 query 参数', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"ok":true}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    interface SSEContract {
+      api: {
+        search: {
+          post: {
+            body: { query: string }
+            return: { ok: boolean }
+          }
+        }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+
+    await new Promise<void>((resolve) => {
+      // POST + query 通过 config.query 传递
+      api.api.search.post({ query: 'test' }, { query: { page: 2 } }).sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    // 验证 URL 包含 query 参数，body 包含数据
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.url).toContain('page=2')
+    expect(req.method).toBe('POST')
+    expect(await req.text()).toBe(JSON.stringify({ query: 'test' }))
+  })
+
+  it('应该支持 params 路径参数', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"roomId":"room-123","message":"hello"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：带 params 的 .get().sse()
+    interface SSEContract {
+      rooms: {
+        ':id': {
+          messages: {
+            get: {
+              query: { since?: string }
+              return: { roomId: string; message: string }
+            }
+          }
+        }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+    const onMessage = vi.fn()
+
+    await new Promise<void>((resolve) => {
+      api.rooms({ id: 'room-123' }).messages.get({ since: '2024-01-01' }).sse({
+        onMessage,
+        onClose: resolve
+      })
+    })
+
+    // 验证 URL 包含 params
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.url).toContain('/rooms/room-123/messages')
+    expect(req.url).toContain('since=2024-01-01')
+    expect(onMessage).toHaveBeenCalledWith({ roomId: 'room-123', message: 'hello' })
+  })
+
+  it('应该支持 PUT SSE', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"progress":100}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.put().sse()
+    interface SSEContract {
+      files: {
+        upload: {
+          put: {
+            body: { filename: string }
+            return: { progress: number }
+          }
+        }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+
+    await new Promise<void>((resolve) => {
+      api.files.upload.put({ filename: 'test.txt' }).sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.method).toBe('PUT')
+    expect(await req.text()).toBe(JSON.stringify({ filename: 'test.txt' }))
+  })
+
+  it('应该支持 PATCH SSE', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"updated":true}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.patch().sse()
+    interface SSEContract {
+      users: {
+        sync: {
+          patch: {
+            body: { fields: string[] }
+            return: { updated: boolean }
+          }
+        }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+
+    await new Promise<void>((resolve) => {
+      api.users.sync.patch({ fields: ['name', 'email'] }).sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.method).toBe('PATCH')
+  })
+
+  it('应该解析 SSE event 字段', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('event: custom\ndata: {"type":"custom"}\n\n'))
+        controller.enqueue(encoder.encode('event: error\ndata: {"message":"test error"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.get().sse()
+    interface SSEContract {
+      events: {
+        get: { return: { type?: string; message?: string } }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+    const onMessage = vi.fn()
+    const onError = vi.fn()
+
+    await new Promise<void>((resolve) => {
+      api.events.get().sse({
+        onMessage,
+        onError,
+        onClose: resolve
+      })
+    })
+
+    // custom 事件应该被 onMessage 处理
+    expect(onMessage).toHaveBeenCalledWith({ type: 'custom' })
+    // error 事件应该被 onError 处理
+    expect(onError).toHaveBeenCalled()
+  })
+
+  it('应该处理 HTTP 错误', async () => {
+    mockFetch.mockResolvedValue(
+      new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      })
+    )
+
+    // 链式调用：.get().sse()
+    interface SSEContract {
+      events: {
+        get: { return: unknown }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+    const onError = vi.fn()
+
+    await new Promise<void>((resolve) => {
+      api.events.get().sse({
+        onMessage: () => { },
+        onError: (err) => {
+          onError(err)
+          resolve()
+        }
+      })
+    })
+
+    expect(onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining('401')
+      })
+    )
+  })
+
+  it('应该支持无参数 SSE', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"ping":"pong"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.get().sse()（无参数）
+    interface SSEContract {
+      heartbeat: {
+        get: { return: { ping: string } }
+      }
+    }
+
+    const api = eden<SSEContract>(createClient('http://localhost:3000'))
+    const onMessage = vi.fn()
+
+    await new Promise<void>((resolve) => {
+      api.heartbeat.get().sse({
+        onMessage,
+        onClose: resolve
+      })
+    })
+
+    expect(onMessage).toHaveBeenCalledWith({ ping: 'pong' })
+  })
+
+  it('SSE 应该走完整中间件链', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"message":"hi"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.get().sse() + 中间件
+    interface SSEContract {
+      events: {
+        get: { return: { message: string } }
+      }
+    }
+
+    const middlewareCalled = vi.fn()
+
+    const client = createClient('http://localhost:3000')
+      .use(async (ctx, next) => {
+        middlewareCalled(ctx.method, ctx.path)
+        ctx.headers.set('Authorization', 'Bearer test-token')
+        ctx.headers.set('X-Custom', 'custom-value')
+        return next()
+      })
+
+    const api = eden<SSEContract>(client)
+
+    await new Promise<void>((resolve) => {
+      api.events.get().sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    // 验证中间件被调用
+    expect(middlewareCalled).toHaveBeenCalledWith('GET', '/events')
+
+    // 验证中间件添加的 headers
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.headers.get('Authorization')).toBe('Bearer test-token')
+    expect(req.headers.get('X-Custom')).toBe('custom-value')
+  })
+
+  it('POST SSE 应该走中间件链并正确传递 body', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"result":"ok"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    // 链式调用：.post().sse() + 中间件
+    interface SSEContract {
+      chat: {
+        post: { body: { prompt: string }; return: { result: string } }
+      }
+    }
+
+    const middlewareCalled = vi.fn()
+
+    const client = createClient('http://localhost:3000')
+      .use(async (ctx, next) => {
+        middlewareCalled(ctx.method, ctx.path, ctx.body)
+        return next()
+      })
+
+    const api = eden<SSEContract>(client)
+
+    await new Promise<void>((resolve) => {
+      api.chat.post({ prompt: 'hello' }).sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    // 验证中间件收到了正确的 body
+    expect(middlewareCalled).toHaveBeenCalledWith('POST', '/chat', { prompt: 'hello' })
+  })
+})
+
+// ============= requestRaw 测试 =============
+
+describe('requestRaw', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+  })
+
+  it('应该返回原始 Response 对象', async () => {
+    const responseBody = 'raw response body'
+    mockFetch.mockResolvedValue(
+      new Response(responseBody, { status: 200 })
+    )
+
+    const client = createClient('http://localhost:3000')
+    const response = await client.requestRaw('GET', '/test')
+
+    expect(response).toBeInstanceOf(Response)
+    expect(response.status).toBe(200)
+    expect(await response.text()).toBe(responseBody)
+  })
+
+  it('应该走中间件链', async () => {
+    mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const middlewareCalled = vi.fn()
+
+    const client = createClient('http://localhost:3000')
+      .use(async (ctx, next) => {
+        middlewareCalled(ctx.method, ctx.path)
+        ctx.headers.set('X-Test', 'test-value')
+        return next()
+      })
+
+    await client.requestRaw('POST', '/api/stream', { data: 'test' })
+
+    expect(middlewareCalled).toHaveBeenCalledWith('POST', '/api/stream')
+
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.headers.get('X-Test')).toBe('test-value')
+  })
+
+  it('应该正确处理 query 参数', async () => {
+    mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const client = createClient('http://localhost:3000')
+    await client.requestRaw('GET', '/search', null, {
+      query: { q: 'test', page: 1 }
+    })
+
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.url).toContain('q=test')
+    expect(req.url).toContain('page=1')
+  })
+
+  it('应该正确处理 POST body', async () => {
+    mockFetch.mockResolvedValue(new Response('ok', { status: 200 }))
+
+    const client = createClient('http://localhost:3000')
+    await client.requestRaw('POST', '/data', { name: 'test' })
+
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.method).toBe('POST')
+    expect(await req.text()).toBe(JSON.stringify({ name: 'test' }))
+  })
+})
+
+// ============= RequestBuilder 懒执行测试 =============
+
+describe('RequestBuilder 懒执行', () => {
+  beforeEach(() => {
+    mockFetch.mockReset()
+  })
+
+  it('创建 builder 时不应该发起请求', async () => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ id: 1 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }))
+
+    interface Contract {
+      users: { get: { return: { id: number } } }
+    }
+
+    const api = eden<Contract>(createClient('http://localhost:3000'))
+
+    // 创建 builder，但不 await
+    const builder = api.users.get()
+
+    // 此时不应该发起请求
+    expect(mockFetch).not.toHaveBeenCalled()
+
+    // await 时才发起请求
+    await builder
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('多次 await 同一个 builder 只应该发起一次请求', async () => {
+    mockFetch.mockResolvedValue(new Response(JSON.stringify({ id: 1 }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' }
+    }))
+
+    interface Contract {
+      users: { get: { return: { id: number } } }
+    }
+
+    const api = eden<Contract>(createClient('http://localhost:3000'))
+    const builder = api.users.get()
+
+    // 多次 await
+    await builder
+    await builder
+    await builder
+
+    // 只应该发起一次请求
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('调用 .sse() 时不应该先发起普通请求', async () => {
+    const encoder = new TextEncoder()
+    const stream = new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode('data: {"msg":"hi"}\n\n'))
+        controller.close()
+      }
+    })
+
+    mockFetch.mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' }
+      })
+    )
+
+    interface Contract {
+      chat: { post: { body: { message: string }; return: { msg: string } } }
+    }
+
+    const api = eden<Contract>(createClient('http://localhost:3000'))
+
+    await new Promise<void>((resolve) => {
+      // 直接调用 .sse()，不 await
+      api.chat.post({ message: 'hi' }).sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    // 只应该发起一次 SSE 请求
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+    const req = mockFetch.mock.calls[0][0] as Request
+    expect(req.method).toBe('POST')
+  })
+
+  it('await 和 .sse() 是独立的请求', async () => {
+    let callCount = 0
+    mockFetch.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        // 第一次是普通请求
+        return Promise.resolve(new Response(JSON.stringify({ id: 1 }), {
+          status: 200,
+          headers: { 'Content-Type': 'application/json' }
+        }))
+      } else {
+        // 第二次是 SSE 请求
+        const encoder = new TextEncoder()
+        const stream = new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"msg":"hi"}\n\n'))
+            controller.close()
+          }
+        })
+        return Promise.resolve(new Response(stream, {
+          status: 200,
+          headers: { 'Content-Type': 'text/event-stream' }
+        }))
+      }
+    })
+
+    interface Contract {
+      users: { post: { body: { name: string }; return: { id: number } } }
+    }
+
+    const api = eden<Contract>(createClient('http://localhost:3000'))
+    const builder = api.users.post({ name: 'John' })
+
+    // 先 await
+    await builder
+    expect(mockFetch).toHaveBeenCalledTimes(1)
+
+    // 再调用 .sse()（会发起新的请求）
+    await new Promise<void>((resolve) => {
+      builder.sse({
+        onMessage: () => { },
+        onClose: resolve
+      })
+    })
+
+    // 总共应该发起两次请求
+    expect(mockFetch).toHaveBeenCalledTimes(2)
   })
 })

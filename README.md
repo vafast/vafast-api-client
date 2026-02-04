@@ -11,6 +11,25 @@
 - 📡 **SSE 支持** - 流式响应、自动重连
 - 🎨 **Go 风格错误** - `{ data, error }` 统一处理
 
+## 业界对比
+
+| 特性 | **@vafast/api-client** | Elysia Eden | tRPC | OpenAPI Generator | Axios / ky |
+|-----|------------------------|------------|------|-------------------|------------|
+| **类型安全** | ✅ 完整（契约/代码生成） | ✅ 完整（类型推断） | ✅ 完整 | ⚠️ 生成代码 | ❌ |
+| **API 风格** | Eden 链式 | Eden 链式（Treaty） | RPC query/mutation | REST 传统 | REST 传统 |
+| **SSE 支持** | ✅ 全方法 + body + 链式 `.sse()` | ✅ 有（subscribe） | ⚠️ 仅 subscription | ❌ | ❌ |
+| **SSE 走中间件** | ✅ 与普通请求一致 | ⚠️ 视实现 | - | - | - |
+| **中间件/拦截器** | ✅ Koa 洋葱模型 | ⚠️ 简单 | ❌ | ❌ | ✅ 拦截器 |
+| **代码生成** | ✅ vafast-cli 从服务端生成 | ❌ 无需（同构） | ❌ 无需（同构） | ✅ 多语言 | ❌ |
+| **框架绑定** | 无（任意后端） | 需 Elysia 服务端 | 需 tRPC 服务端 | 无 | 无 |
+
+**与 Elysia Eden 的差异**：
+
+- **Eden**：与 Elysia 同构，服务端用 Elysia 时类型自动同步，零代码生成；SSE 用 `subscribe()`，流式能力与类型推断在部分场景有已知问题。
+- **本库**：与具体后端框架解耦，通过 vafast 契约或 vafast-cli 生成类型；SSE 与普通请求统一为链式调用（如 `api.xxx.post(body).sse(callbacks)`），且 **SSE 请求走完整中间件链**（认证、日志等与普通请求一致）；支持 GET/POST/PUT/PATCH/DELETE 全方法 + body 的 SSE。
+
+若后端已是 Elysia，可优先用 Eden；若后端是 vafast 或其他框架、或需要强中间件 + 全方法 SSE，本库更合适。
+
 ## 安装
 
 ```bash
@@ -52,11 +71,12 @@ console.log(data.users)
 | `api.users.find.post({ page })` | POST /users/find |
 | `api.videoGeneration.delete.post({ id })` | POST /videoGeneration/delete |
 | `api.users({ id: '123' }).get()` | GET /users/123 |
-| `api.chat.stream.sse(callbacks)` | SSE /chat/stream |
+| `api.events.get({ channel }).sse(callbacks)` | GET SSE /events |
+| `api.chat.stream.post(body).sse(callbacks)` | POST SSE /chat/stream |
 
 **规则**：
 - `get`, `post`, `put`, `patch`, `delete` → HTTP 方法
-- `sse` → SSE 订阅
+- `.sse()` → 链式调用，转换为 SSE 订阅
 - 其他 → 路径段
 
 这样即使路径名是 `delete`、`get` 等，也不会与 HTTP 方法冲突。
@@ -99,6 +119,37 @@ const client = createClient({ baseURL: '/api', timeout: 30000 })
   .timeout(60000)                         // 覆盖超时配置
   .use(authMiddleware)                    // 添加中间件
   .use(retryMiddleware({ count: 3 }))
+```
+
+### client.requestRaw()
+
+发起原始请求，返回 Response 对象（不解析 JSON）。用于 SSE、流式下载等需要直接处理响应流的场景。
+
+```typescript
+const client = createClient('http://localhost:3000')
+  .use(authMiddleware)  // 中间件对 requestRaw 同样有效
+
+// 发起原始请求（走完整中间件链）
+const response = await client.requestRaw('GET', '/api/stream', null, {
+  query: { channel: 'updates' }
+})
+
+// 直接处理响应流
+const reader = response.body.getReader()
+for await (const chunk of readStream(reader)) {
+  console.log(chunk)
+}
+```
+
+**签名：**
+
+```typescript
+requestRaw(
+  method: string,
+  path: string,
+  body?: unknown,
+  config?: RequestConfig
+): Promise<Response>
 ```
 
 ### eden<T>(client)
@@ -168,10 +219,16 @@ type MyApi = {
       delete: { return: { success: boolean } }
     }
   }
-  // SSE 方法：作为一等公民
+  // SSE：使用普通 HTTP 方法 + .sse() 链式调用
+  events: {
+    get: { query: { channel: string }; return: EventData }
+  }
   chat: {
     stream: {
-      sse: { query: { prompt: string }; return: { text: string } }
+      post: {  // POST SSE
+        body: { messages: Message[] }
+        return: { content: string }
+      }
     }
   }
 }
@@ -311,13 +368,24 @@ const { data, error } = await api.users.get(
 const { data, error } = await api.users.get()
 
 if (error) {
-  // error: { code: number; message: string }
-  switch (error.code) {
-    case 401:
-      redirectToLogin()
+  // error: { code: number; message: string; type?: ErrorType }
+  console.log(`错误类型: ${error.type}`)  // 'network' | 'timeout' | 'abort' | 'server' | 'unknown'
+  
+  switch (error.type) {
+    case 'network':
+      showOfflineMessage()
       break
-    case 403:
-      showPermissionDenied()
+    case 'timeout':
+      showTimeoutMessage()
+      break
+    case 'abort':
+      // 用户取消，不需要处理
+      break
+    case 'server':
+      // 服务端错误，根据 code 处理
+      if (error.code === 401) redirectToLogin()
+      else if (error.code === 403) showPermissionDenied()
+      else showError(error.message)
       break
     default:
       showError(error.message)
@@ -329,22 +397,101 @@ if (error) {
 console.log(data.users)
 ```
 
+### 错误类型说明
+
+| 类型 | 说明 | code |
+|------|------|------|
+| `network` | 网络错误（无法连接） | 0 |
+| `timeout` | 请求超时 | 408 |
+| `abort` | 请求被取消 | 0 |
+| `server` | 服务端错误（4xx/5xx） | HTTP 状态码 |
+| `unknown` | 未知错误 | 0 |
+
 ## SSE 流式响应
 
-`sse` 是一等公民方法，与 `get`/`post` 等 HTTP 方法平级：
+SSE 通过**链式调用**实现：普通 HTTP 方法后接 `.sse()`。
+
+### 基本用法
+
+```typescript
+const api = eden<Api>(client)
+
+// 普通请求（直接 await）
+const result = await api.users.get({ page: 1 })
+
+// SSE 请求（链式调用 .sse()）
+api.chat.stream.post({ message: 'hi' }).sse({
+  onMessage: (data) => console.log(data),
+  onClose: () => console.log('done')
+})
+```
+
+### 懒执行
+
+RequestBuilder 采用**懒执行**设计：
+
+```typescript
+// 创建 builder 时不发起请求
+const builder = api.users.get({ page: 1 })
+
+// await 时才发起普通请求
+await builder
+
+// 或调用 .sse() 发起 SSE 请求
+builder.sse({ onMessage })
+```
+
+### 中间件支持
+
+**SSE 请求走完整的中间件链**，与普通请求一样。认证、日志、错误处理等中间件都会自动生效：
+
+```typescript
+const client = createClient('http://localhost:3000')
+  .use(async (ctx, next) => {
+    // 这个中间件对 SSE 请求同样有效！
+    ctx.headers.set('Authorization', `Bearer ${token}`)
+    console.log(`[${ctx.method}] ${ctx.path}`)
+    return next()
+  })
+
+const api = eden<Api>(client)
+
+// SSE 请求会自动带上 Authorization header
+api.chat.stream.post({ message: '你好' }).sse({
+  onMessage: console.log
+})
+```
 
 ### 契约定义
 
 ```typescript
-// sse 作为独立方法定义（简洁直观）
 type Api = {
+  // GET SSE - 事件订阅
+  events: {
+    get: { query: { channel: string }; return: { type: string; data: unknown } }
+  }
+  
+  // POST SSE - AI 对话
   chat: {
     stream: {
-      sse: { query: { prompt: string }; return: { text: string } }
+      post: { 
+        body: { messages: Array<{ role: string; content: string }> }
+        return: { content?: string; done?: boolean }
+      }
     }
   }
-  events: {
-    sse: { return: { type: string; data: unknown } }  // 无 query 参数
+  
+  // DELETE SSE - 批量删除进度
+  batch: {
+    delete: {
+      body: { ids: string[] }
+      return: { deleted: number; total: number }
+    }
+  }
+  
+  // 无参数 SSE
+  heartbeat: {
+    get: { return: { ping: string } }
   }
 }
 ```
@@ -354,29 +501,68 @@ type Api = {
 ```typescript
 const api = eden<Api>(client)
 
-// 有 query 参数
-const subscription = api.chat.stream.sse(
-  { prompt: '你好' },  // query 参数
-  {
-    onMessage: (data) => console.log('收到:', data.text),
-    onError: (error) => console.error('错误:', error),
-    onOpen: () => console.log('连接建立'),
-    onClose: () => console.log('连接关闭'),
-    onReconnect: (attempt, max) => console.log(`重连 ${attempt}/${max}`)
-  },
-  {
-    reconnectInterval: 3000,
-    maxReconnects: 5
-  }
-)
+// GET SSE - 事件订阅
+api.events.get({ channel: 'news' }).sse({
+  onMessage: (data) => console.log(data)
+})
 
-// 无 query 参数
-const eventSub = api.events.sse({
-  onMessage: (data) => console.log('事件:', data.type)
+// POST SSE - AI 对话
+api.chat.stream.post({ messages: [{ role: 'user', content: '你好' }] }).sse({
+  onMessage: (data) => {
+    if (data.content) process.stdout.write(data.content)
+    if (data.done) console.log('\n[完成]')
+  },
+  onError: (error) => console.error('错误:', error),
+  onOpen: () => console.log('连接建立'),
+  onClose: () => console.log('连接关闭')
+})
+
+// DELETE SSE - 批量删除进度
+api.batch.delete({ ids: ['1', '2', '3'] }).sse({
+  onMessage: (data) => console.log(`删除进度: ${data.deleted}/${data.total}`)
+})
+
+// POST + query 参数
+api.search.post({ query: 'TypeScript' }, { query: { page: 2 } }).sse({
+  onMessage: (data) => console.log(data.results)
+})
+
+// 无参数 SSE
+api.heartbeat.get().sse({ onMessage: console.log })
+
+// 带路径参数
+api.rooms({ id: 'room-123' }).messages.get().sse({
+  onMessage: (data) => console.log(data)
 })
 
 // 取消订阅
-subscription.unsubscribe()
+const sub = api.events.get({ channel: 'live' }).sse({ onMessage: console.log })
+sub.unsubscribe()
+```
+
+### SSE 回调
+
+```typescript
+interface SSECallbacks<T> {
+  onMessage: (data: T) => void  // 必需：接收消息
+  onError?: (error: ApiError) => void  // 错误处理
+  onOpen?: () => void  // 连接建立
+  onClose?: () => void  // 连接关闭
+  onReconnect?: (attempt: number, max: number) => void  // 重连中
+  onMaxReconnects?: () => void  // 达到最大重连次数
+}
+```
+
+### SSE 选项
+
+SSE 回调中还可以传递以下选项：
+
+```typescript
+interface SSECallbackOptions {
+  reconnect?: boolean  // 是否自动重连，默认 true
+  reconnectInterval?: number  // 重连间隔（ms），默认 3000
+  maxReconnects?: number  // 最大重连次数，默认 5
+}
 ```
 
 ## 请求取消
@@ -420,6 +606,8 @@ HTTP 401 Unauthorized
 
 ### ❌ 不推荐：全部返回 200 + success 字段
 
+**本库不推荐**将业务错误也通过 HTTP 200 返回、用 `success` 等字段表示成败的做法。应使用 HTTP 状态码表达错误（见上节）。
+
 ```json
 HTTP 200 OK
 
@@ -429,6 +617,8 @@ HTTP 200 OK
   "message": "Token 已过期"
 }
 ```
+
+上述写法会导致监控、缓存、重试、调试都难以按 HTTP 语义工作，仅在后端无法改动时用中间件做兼容（见下节）。
 
 ### 为什么 HTTP 状态码更好？
 

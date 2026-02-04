@@ -8,6 +8,17 @@
 export type HTTPMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'HEAD' | 'OPTIONS'
 
 /**
+ * 错误类型枚举
+ */
+export type ErrorType =
+  | 'network'    // 网络错误（无法连接）
+  | 'timeout'    // 超时错误
+  | 'abort'      // 请求被取消
+  | 'server'     // 服务端错误（4xx/5xx）
+  | 'parse'      // 响应解析错误
+  | 'unknown'    // 未知错误
+
+/**
  * API 错误 - Go 风格结构化错误
  */
 export interface ApiError {
@@ -15,6 +26,8 @@ export interface ApiError {
   code: number
   /** 错误消息 */
   message: string
+  /** 错误类型（便于分类处理） */
+  type?: ErrorType
 }
 
 /**
@@ -139,17 +152,36 @@ export interface MiddlewareOptions {
 export interface Client {
   /** 基础 URL */
   readonly baseURL: string
-  
+
   /** 添加中间件 */
   use(middleware: Middleware): Client
   use(name: string, middleware: Middleware): Client
-  
+
   /** 设置默认请求头 */
   headers(h: Record<string, string>): Client
-  
+
   /** 设置默认超时 */
   timeout(ms: number): Client
-  
+
+  /**
+   * 发起原始请求（返回 Response 对象，不解析 JSON）
+   * 
+   * 用于 SSE/流式请求等需要直接处理响应流的场景
+   * 请求会完整走中间件链，但响应不会被解析
+   * 
+   * @param method - HTTP 方法
+   * @param path - 请求路径
+   * @param body - 请求体
+   * @param config - 请求配置
+   * @returns 原始 Response 对象
+   */
+  requestRaw(
+    method: string,
+    path: string,
+    body?: unknown,
+    config?: RequestConfig
+  ): Promise<Response>
+
   /** 发起请求 */
   request<T = unknown>(
     method: string,

@@ -44,6 +44,10 @@ export interface SSEEvent<T = unknown> {
 }
 
 export interface SSESubscribeOptions {
+  /** HTTP 方法，默认 GET。有 body 时建议使用 POST/PUT/PATCH/DELETE */
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+  /** 额外的 URL 查询参数（与 body 一起使用时） */
+  query?: Record<string, unknown>
   headers?: Record<string, string>
   reconnectInterval?: number
   maxReconnects?: number
@@ -231,9 +235,25 @@ interface MethodDef {
   return: unknown
 }
 
-/** SSE 方法定义（独立于 HTTP 方法） */
+/** 
+ * SSE 方法定义（支持所有 HTTP 方法）
+ * 
+ * @example
+ * ```typescript
+ * // GET SSE（默认）
+ * sse: { query: QuerySchema, return: EventSchema }
+ * 
+ * // POST SSE（带 body）
+ * sse: { method: 'POST', body: BodySchema, return: EventSchema }
+ * 
+ * // DELETE SSE（批量删除进度）
+ * sse: { method: 'DELETE', body: IdsSchema, return: ProgressSchema }
+ * ```
+ */
 interface SSEMethodDef {
+  method?: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
   query?: unknown
+  body?: unknown
   return: unknown
 }
 
@@ -252,7 +272,7 @@ type RouteNode = {
 
 // ============= 客户端类型 =============
 
-interface SSECallbacks<T> {
+export interface SSECallbacks<T> {
   onMessage: (data: T) => void
   onError?: (error: ApiError) => void
   onOpen?: () => void
@@ -261,37 +281,51 @@ interface SSECallbacks<T> {
   onMaxReconnects?: () => void
 }
 
-/** HTTP 方法调用签名 */
+/** 
+ * SSE 回调选项（链式调用时只需要传这些）
+ */
+export type SSECallbackOptions = Omit<SSESubscribeOptions, 'method' | 'query'>
+
+/**
+ * 请求构建器 - 支持普通请求和 SSE 链式调用
+ * 
+ * @example
+ * ```typescript
+ * // 普通请求（直接 await）
+ * const result = await api.users.get({ page: 1 })
+ * 
+ * // SSE 请求（链式调用 .sse()）
+ * api.chat.stream.post({ message: 'hi' }).sse({
+ *   onMessage: (data) => console.log(data),
+ *   onClose: () => console.log('done')
+ * })
+ * ```
+ */
+export interface RequestBuilder<T> extends PromiseLike<ApiResponse<T>> {
+  /** 转换为 SSE 订阅 */
+  sse(callbacks: SSECallbacks<T> & SSECallbackOptions): SSESubscription<T>
+}
+
+/** HTTP 方法调用签名 - 返回 RequestBuilder（可 await 或 .sse()） */
 type HTTPMethodCall<M extends MethodDef, HasParams extends boolean = false> =
   HasParams extends true
   ? M extends { body: infer B }
-  ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
-  : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
+  ? (body: B, config?: RequestConfig) => RequestBuilder<M['return']>
+  : (config?: RequestConfig) => RequestBuilder<M['return']>
   : M extends { query: infer Q }
-  ? (query?: Q, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
+  ? (query?: Q, config?: RequestConfig) => RequestBuilder<M['return']>
   : M extends { body: infer B }
-  ? (body: B, config?: RequestConfig) => Promise<ApiResponse<M['return']>>
-  : (config?: RequestConfig) => Promise<ApiResponse<M['return']>>
+  ? (body: B, config?: RequestConfig) => RequestBuilder<M['return']>
+  : (config?: RequestConfig) => RequestBuilder<M['return']>
 
-/** SSE 方法调用签名 */
-type SSEMethodCall<M extends SSEMethodDef> =
-  M extends { query: infer Q }
-  ? (query: Q, callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
-  : (callbacks: SSECallbacks<M['return']>, options?: SSESubscribeOptions) => SSESubscription<M['return']>
-
-/** 端点类型：HTTP 方法 + SSE 方法 */
+/** 端点类型：HTTP 方法（SSE 通过 .sse() 链式调用） */
 type Endpoint<T, HasParams extends boolean = false> =
-  // HTTP 方法
   {
     [K in 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' as T extends { [P in K]: MethodDef } ? K : never]:
     T extends { [P in K]: infer M extends MethodDef } ? HTTPMethodCall<M, HasParams> : never
   }
-  // SSE 方法（作为一等公民）
-  & (T extends { sse: infer M extends SSEMethodDef }
-    ? { sse: SSEMethodCall<M> }
-    : {})
 
-type HTTPMethods = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options' | 'sse'
+type HTTPMethods = 'get' | 'post' | 'put' | 'patch' | 'delete' | 'head' | 'options'
 
 /** 
  * 判断是否是路由节点（包含 HTTP 方法作为子键）
@@ -401,24 +435,6 @@ import type { Client } from '../types'
  * ```
  */
 export function eden<T>(client: Client): EdenClient<T> {
-  // 获取原始 baseURL（用于普通请求）
-  const originalBaseURL = client.baseURL || ''
-
-  // SSE 需要绝对 URL，延迟构建（只在实际使用 SSE 时才需要）
-  function getSSEBaseURL(): string {
-    if (originalBaseURL.startsWith('http://') || originalBaseURL.startsWith('https://')) {
-      return originalBaseURL
-    }
-    // 相对路径：转换为绝对 URL
-    const origin = typeof window !== 'undefined' && window.location?.origin
-      ? window.location.origin
-      : 'http://localhost'
-    return originalBaseURL ? `${origin}${originalBaseURL}` : origin
-  }
-
-  // SSE 默认 headers（空对象，用户通过中间件添加）
-  const defaultHeaders: Record<string, string> = {}
-
   // 请求函数：委托给 client
   async function request<TReturn>(
     method: string,
@@ -429,22 +445,24 @@ export function eden<T>(client: Client): EdenClient<T> {
     return client.request<TReturn>(method, path, data, requestConfig)
   }
 
+  /**
+   * SSE 订阅（支持所有 HTTP 方法）
+   * 
+   * @param path - 请求路径
+   * @param method - HTTP 方法，默认 GET
+   * @param body - 请求体（POST/PUT/PATCH/DELETE 时使用）
+   * @param query - URL 查询参数
+   * @param callbacks - 事件回调
+   * @param options - 订阅选项
+   */
   function subscribe<TData>(
     path: string,
+    method: string,
+    body: unknown | undefined,
     query: Record<string, unknown> | undefined,
     callbacks: SSECallbacks<TData>,
     options?: SSESubscribeOptions
   ): SSESubscription<TData> {
-    const url = new URL(path, getSSEBaseURL())
-
-    if (query) {
-      for (const [key, value] of Object.entries(query)) {
-        if (value !== undefined && value !== null) {
-          url.searchParams.set(key, String(value))
-        }
-      }
-    }
-
     let abortController: AbortController | null = new AbortController()
     let connected = false
     let reconnectCount = 0
@@ -460,21 +478,28 @@ export function eden<T>(client: Client): EdenClient<T> {
       try {
         abortController = new AbortController()
 
-        const headers: Record<string, string> = {
+        // 构建请求配置（中间件会自动添加认证头）
+        const requestHeaders: Record<string, string> = {
           'Accept': 'text/event-stream',
-          ...defaultHeaders,
           ...options?.headers,
         }
 
         if (lastEventId) {
-          headers['Last-Event-ID'] = lastEventId
+          requestHeaders['Last-Event-ID'] = lastEventId
         }
 
-        const response = await fetch(url.toString(), {
-          method: 'GET',
-          headers,
-          signal: abortController.signal,
-        })
+        // 通过 client.requestRaw() 发起请求
+        // 这样请求会完整走中间件链（认证、日志等）
+        const response = await client.requestRaw(
+          method,
+          path,
+          body,
+          {
+            headers: requestHeaders,
+            signal: abortController.signal,
+            query,
+          }
+        )
 
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`)
@@ -519,11 +544,17 @@ export function eden<T>(client: Client): EdenClient<T> {
           reconnectCount++
           callbacks.onReconnect?.(reconnectCount, maxReconnects)
 
+          // 指数退避重连：1s, 2s, 4s, 8s...（最大 30s）
+          const backoffDelay = Math.min(
+            reconnectInterval * Math.pow(2, reconnectCount - 1),
+            30000
+          )
+
           setTimeout(() => {
             if (!isUnsubscribed) {
               connect()
             }
-          }, reconnectInterval)
+          }, backoffDelay)
         } else {
           callbacks.onMaxReconnects?.()
         }
@@ -545,6 +576,10 @@ export function eden<T>(client: Client): EdenClient<T> {
     }
   }
 
+  // HTTP 方法列表（提取到外部避免重复创建）
+  const httpMethods = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options'] as const
+  const httpMethodsSet = new Set(httpMethods)
+
   /**
    * 新方案：segments 数组 + 最后一个判断 HTTP 方法
    * 
@@ -555,7 +590,6 @@ export function eden<T>(client: Client): EdenClient<T> {
    * api.users({ id: '123' }).get()     → GET /users/123
    */
   function createEndpoint(segments: string[]): unknown {
-    const httpMethods = ['get', 'post', 'put', 'patch', 'delete', 'head', 'options']
 
     return new Proxy(() => { }, {
       get(_, prop: string) {
@@ -575,7 +609,7 @@ export function eden<T>(client: Client): EdenClient<T> {
           && !Array.isArray(firstArg)
           && Object.keys(firstArg).length === 1
           && !('onMessage' in firstArg) // 排除 SSE callbacks
-          && !httpMethods.includes(last) // 不是 HTTP 方法
+          && !httpMethodsSet.has(last as typeof httpMethods[number]) // 不是 HTTP 方法
           && last !== 'sse' // 不是 SSE
         ) {
           const paramValue = Object.values(firstArg)[0]
@@ -585,31 +619,49 @@ export function eden<T>(client: Client): EdenClient<T> {
         const pathSegments = segments.slice(0, -1)
         const path = '/' + pathSegments.join('/')
 
-        // SSE 订阅
-        if (last === 'sse') {
-          const [callbacksOrQuery, optionsOrCallbacks, options] = args as [
-            Record<string, unknown> | SSECallbacks<unknown>,
-            SSECallbacks<unknown> | SSESubscribeOptions | undefined,
-            SSESubscribeOptions | undefined
-          ]
-
-          // 判断第一个参数是 callbacks 还是 query
-          const isCallbacks = typeof callbacksOrQuery === 'object'
-            && 'onMessage' in callbacksOrQuery
-            && typeof callbacksOrQuery.onMessage === 'function'
-
-          if (isCallbacks) {
-            return subscribe(path, undefined, callbacksOrQuery as SSECallbacks<unknown>, optionsOrCallbacks as SSESubscribeOptions)
-          } else {
-            return subscribe(path, callbacksOrQuery as Record<string, unknown>, optionsOrCallbacks as SSECallbacks<unknown>, options)
-          }
-        }
-
-        // HTTP 方法
-        if (httpMethods.includes(last)) {
+        // HTTP 方法 - 返回 RequestBuilder（可 await 或 .sse()）
+        if (httpMethodsSet.has(last as typeof httpMethods[number])) {
           const method = last.toUpperCase()
           const [data, config] = args as [unknown?, RequestConfig?]
-          return request(method, path, data, config)
+
+          // 确定 body 和 query
+          let body: unknown
+          let query: Record<string, unknown> | undefined
+
+          if (method === 'GET' || method === 'HEAD') {
+            // GET/HEAD：data 是 query 参数
+            query = data as Record<string, unknown>
+          } else {
+            // 其他方法：data 是 body
+            body = data
+            query = config?.query
+          }
+
+          // 创建 RequestBuilder（支持 await 和 .sse()）
+          // 注意：请求是懒执行的，只有 await 或 .sse() 才会触发
+          let requestPromise: Promise<ApiResponse<unknown>> | null = null
+
+          const builder: RequestBuilder<unknown> = {
+            // PromiseLike - 支持 await（懒执行）
+            then<TResult1 = ApiResponse<unknown>, TResult2 = never>(
+              onfulfilled?: ((value: ApiResponse<unknown>) => TResult1 | PromiseLike<TResult1>) | null,
+              onrejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
+            ): Promise<TResult1 | TResult2> {
+              // 懒执行：只有 await 时才发起请求
+              if (!requestPromise) {
+                requestPromise = request(method, path, body, { ...config, query })
+              }
+              return requestPromise.then(onfulfilled, onrejected)
+            },
+
+            // SSE 链式调用
+            sse(callbacks: SSECallbacks<unknown> & SSECallbackOptions): SSESubscription<unknown> {
+              const sseMethod = method as 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
+              return subscribe(path, method, body, query, callbacks, { method: sseMethod, ...callbacks })
+            }
+          }
+
+          return builder
         }
 
         // 默认 POST（路径末尾不是方法名）

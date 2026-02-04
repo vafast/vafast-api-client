@@ -38,6 +38,9 @@ export {
   type SSEEvent,
   type SSESubscribeOptions,
   type SSESubscription,
+  type RequestBuilder,
+  type SSECallbacks,
+  type SSECallbackOptions,
 } from './core/eden'
 
 // ==================== 中间件 ====================
@@ -55,6 +58,7 @@ export {
 export type {
   // 基础类型
   HTTPMethod,
+  ErrorType,
   ApiError,
   ApiResponse,
   RequestConfig,
