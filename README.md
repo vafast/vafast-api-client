@@ -368,9 +368,15 @@ const { data, error } = await api.users.get(
 const { data, error } = await api.users.get()
 
 if (error) {
-  // error: { code: number; message: string; type?: ErrorType }
-  console.log(`错误类型: ${error.type}`)  // 'network' | 'timeout' | 'abort' | 'server' | 'unknown'
-  
+  // error: { code: number; message: string; type?: ErrorType; details?: ErrorDetail[] }
+  console.log(`错误类型: ${error.type}`)
+
+  // Schema 校验失败（422 + details）→ 绑定表单字段
+  if (isValidationError(error)) {
+    formRef.setFields(mapDetailsToFormFields(error.details))
+    return
+  }
+
   switch (error.type) {
     case 'network':
       showOfflineMessage()
@@ -406,6 +412,42 @@ console.log(data.users)
 | `abort` | 请求被取消 | 0 |
 | `server` | 服务端错误（4xx/5xx） | HTTP 状态码 |
 | `unknown` | 未知错误 | 0 |
+
+### Schema 校验错误（422）
+
+vafast 路由 `schema` 校验失败时，HTTP **422**，响应体：
+
+```json
+{
+  "code": 422,
+  "message": "请求参数校验失败",
+  "details": [
+    {
+      "location": "body",
+      "path": "/email",
+      "field": "email",
+      "message": "Expected string to match 'email' format",
+      "value": "2212"
+    }
+  ]
+}
+```
+
+api-client 透传 `error.details`（`message` 为 TypeBox 英文原文）：
+
+```typescript
+import { createClient, eden, isValidationError, mapDetailsToFormFields } from '@vafast/api-client'
+
+const { data, error } = await api.invoice.apply.post(body)
+
+if (isValidationError(error)) {
+  // [{ field: 'email', message: "Expected string to match 'email' format" }, ...]
+  formRef.setFields(mapDetailsToFormFields(error.details))
+  return
+}
+```
+
+业务错误（无 `details`）仍按 `error.code` / `error.message` 处理。
 
 ## SSE 流式响应
 

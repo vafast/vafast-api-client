@@ -53,6 +53,8 @@ export {
   type LoggerOptions,
 } from './middlewares'
 
+export { isValidationError, mapDetailsToFormFields } from './utils/validation'
+
 // ==================== 类型 ====================
 
 export type {
@@ -61,6 +63,9 @@ export type {
   ErrorType,
   ApiError,
   ApiResponse,
+  ErrorBody,
+  ErrorDetail,
+  SchemaLocation,
   RequestConfig,
   // 上下文类型
   RequestContext,

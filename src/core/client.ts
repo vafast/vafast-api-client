@@ -9,6 +9,7 @@ import type {
   ApiError,
   ApiResponse,
   Client,
+  ErrorBody,
   ErrorType,
   Middleware,
   NamedMiddleware,
@@ -56,13 +57,19 @@ function createErrorResponse<T = unknown>(
   message: string,
   ctx: RequestContext,
   raw: Response | null = null,
-  type: ErrorType = 'unknown'
+  type: ErrorType = 'unknown',
+  details?: ErrorBody['details'],
 ): ResponseContext<T> {
   return {
     request: ctx,
     raw,
     data: null,
-    error: { code, message, type },
+    error: {
+      code,
+      message,
+      type,
+      ...(details?.length ? { details } : {}),
+    },
     status: raw?.status ?? 0,
   }
 }
@@ -290,13 +297,14 @@ class ClientImpl implements Client {
           return createSuccessResponse(data, ctx, response)
         }
 
-        const errorData = data as { code?: number; message?: string } | null
+        const errorData = data as ErrorBody | null
         return createErrorResponse<T>(
           errorData?.code ?? response.status,
           errorData?.message ?? `HTTP ${response.status}`,
           ctx,
           response,
-          'server'
+          'server',
+          errorData?.details,
         )
       } catch (err) {
         clearTimeout(timeoutId)

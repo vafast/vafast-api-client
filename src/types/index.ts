@@ -18,6 +18,30 @@ export type ErrorType =
   | 'parse'      // 响应解析错误
   | 'unknown'    // 未知错误
 
+/** Schema 校验位置 */
+export type SchemaLocation =
+  | 'body'
+  | 'query'
+  | 'params'
+  | 'headers'
+  | 'cookies'
+
+/** 单条字段校验错误（422 details，message 为 TypeBox 原文） */
+export interface ErrorDetail {
+  location: SchemaLocation
+  path: string
+  field: string
+  message: string
+  value?: unknown
+}
+
+/** 服务端错误响应体 */
+export interface ErrorBody {
+  code?: number
+  message?: string
+  details?: ErrorDetail[]
+}
+
 /**
  * API 错误 - Go 风格结构化错误
  */
@@ -28,6 +52,8 @@ export interface ApiError {
   message: string
   /** 错误类型（便于分类处理） */
   type?: ErrorType
+  /** Schema 校验明细（422 时存在） */
+  details?: ErrorDetail[]
 }
 
 /**
